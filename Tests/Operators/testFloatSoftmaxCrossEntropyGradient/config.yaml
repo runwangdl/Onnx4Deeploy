@@ -1,0 +1,3 @@
+softmax_cross_entropy_grad:
+  input_shape: [4, 10]  
+  reduction: "mean"  

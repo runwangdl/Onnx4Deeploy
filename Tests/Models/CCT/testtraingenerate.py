@@ -1,100 +1,32 @@
 import onnx
+from onnx import helper
 import torch
-import yaml
 import os
-import numpy as np
 import sys
-import subprocess
 import io
-from torch import nn
-from CCT.cct import cct_test  # Ensure correct import based on your CCT module
+from CCT.cct import cct_test  
 from onnxruntime.training import artifacts
-
-def make_c_name(name, count=0):
-    if name.lower() in ["input", "output"]:
-        return name  # Keep 'input' and 'output' as is
-    
-    name = re.sub(r'input|output', '', name, flags=re.IGNORECASE)  # Remove 'input' and 'output' from other names
-    name = re.sub(r'[^a-zA-Z0-9_]', '_', name)
-    if name[0].isdigit() or name[0] == '_':
-        name = f'node_{count}' + name
-    return name
-
-def run_onnx_optimization(onnx_file, embedding_dim, num_heads, input_shape):
-    """ Run ONNX Runtime tools to optimize the model """
-
-    batch_size, channels, height, width = input_shape  # Extract input dimensions
-
-    try:
-        print("🔹 Fixing dynamic shape...")
-        subprocess.run([
-            "python", "-m", "onnxruntime.tools.make_dynamic_shape_fixed",
-            "--input_name", "input",
-            "--input_shape", f"{batch_size},{channels},{height},{width}",
-            onnx_file, onnx_file
-        ], check=True)
-
-        print("🔹 Running symbolic shape inference...")
-        subprocess.run([
-            "python", "-m", "onnxruntime.tools.symbolic_shape_infer",
-            "--input", onnx_file, "--output", onnx_file, "--verbose", "3"
-        ], check=True)
-
-        print("🔹 Optimizing ONNX model for ViT...")
-        subprocess.run([
-            "python", "-m", "onnxruntime.transformers.optimizer",
-            "--input", onnx_file, "--output", onnx_file,
-            "--model_type", "vit",
-            "--num_heads", str(num_heads),  # Controlled via config
-            "--hidden_size", str(embedding_dim),  # Ensures hidden size = embedding_dim
-            "--use_multi_head_attention",
-            "--disable_bias_skip_layer_norm",
-            "--disable_skip_layer_norm",
-            "--disable_bias_gelu"
-        ], check=True)
-
-        print("✅ ONNX model optimization complete!")
-
-    except subprocess.CalledProcessError as e:
-        print(f"❌ Error during ONNX optimization: {e}")
+from utils.utils import run_onnx_optimization, load_config, rename_and_save_onnx, run_train_onnx_optimization, rename_nodes, randomize_layernorm_params
+from utils.fixshape import infer_shapes_with_custom_ops, print_onnx_shapes
 
 def generate_cct_training_onnx(save_path=None):
     """ Generate ONNX training model for CCT based on config, with optional save path """
 
-    # Resolve config.yaml relative to the script's location
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    config_file = os.path.join(script_dir, "config.yaml")
+    pretrained, img_size, num_classes, embedding_dim, num_heads, num_layers, batch_size, opset_version = load_config()
 
-    # Load configuration
-    with open(config_file, "r") as f:
-        config = yaml.safe_load(f)
+    input_shape = (batch_size, 3, img_size, img_size)  
 
-    model_config = config["cct"]
-
-    # Extract parameters from config
-    pretrained = model_config["pretrained"]
-    img_size = model_config["img_size"]  
-    num_classes = model_config["num_classes"]
-    embedding_dim = model_config["embedding_dim"]
-    num_heads = model_config["num_heads"]  
-    num_layers = model_config["num_layers"]  
-    opset_version = model_config.get("opset_version", 12)
-
-    # Ensure input_shape is correctly set based on img_size
-    input_shape = (1, 3, img_size, img_size)  
-
-    # Generate a unique folder name based on model parameters
     folder_name = f"CCT_train_{img_size}_{embedding_dim}_{num_heads}_{num_layers}"
     
-    # Set default save path if not provided
-    base_path = save_path if save_path else os.path.join(script_dir, "onnx", folder_name)
+
+    base_path = save_path if save_path else os.path.join(os.path.dirname(os.path.abspath(__file__)), "onnx", folder_name)
     os.makedirs(base_path, exist_ok=True)  # Ensure directory exists
 
-    # Define filenames
-    onnx_infer_file = os.path.join(base_path, "network_infer.onnx")  # Initial PyTorch exported ONNX
-    onnx_train_file = os.path.join(base_path, "network_train.onnx")  # Final training model
+    onnx_infer_file = os.path.join(base_path, "network_infer.onnx")  
+    onnx_train_file = os.path.join(base_path, "network_train.onnx")  
+    onnx_output_file = os.path.join(base_path, "network.onnx")
+    onnx_train_optim = os.path.join(base_path, "network_train_optim.onnx")
 
-    # Load CCT model with parameters from config
     model = cct_test(
         pretrained=pretrained, 
         img_size=img_size, 
@@ -103,15 +35,8 @@ def generate_cct_training_onnx(save_path=None):
         num_heads=num_heads,  
         num_layers=num_layers  
     )
-    model.train()  # Ensure the model is in training mode
-
-    # Identify only `classifier.fc.weight` for training
-    all_param_names = [name for name, _ in model.named_parameters()]
-    requires_grad = [name for name in all_param_names if name in ["classifier.fc.weight", "classifier.fc.bias", "/classifier/attention_pool/Transpose_output_0"]]  # Train only `classifier.fc.weight`
-    frozen_params = [name for name in all_param_names if name not in requires_grad]  # Freeze all others
-
-    print(f"🔹 Training Only: {requires_grad}")
-    print(f"🔹 Frozen Parameters: {frozen_params}")
+    model.train()
+    model = randomize_layernorm_params(model)
 
     # Generate random input data for export
     input_tensor = torch.randn(*input_shape, dtype=torch.float32)
@@ -126,8 +51,8 @@ def generate_cct_training_onnx(save_path=None):
         output_names=["output"],
         opset_version=opset_version,
         do_constant_folding=False,  # Ensure parameters are not folded into constants
-        training=torch.onnx.TrainingMode.TRAINING,
-        dynamic_axes={"input": {0: "batch_size"}, "output": {0: "batch_size"}},
+        # training=torch.onnx.TrainingMode.TRAINING,
+        # dynamic_axes={"input": {0: "batch_size"}, "output": {0: "batch_size"}},
         export_params=True,
         keep_initializers_as_inputs=False,
     )
@@ -137,25 +62,76 @@ def generate_cct_training_onnx(save_path=None):
     onnx.save(onnx_model, onnx_infer_file)
     print(f"✅ Inference ONNX model saved to {onnx_infer_file}")
 
+    rename_and_save_onnx(onnx_infer_file, onnx_infer_file)
     run_onnx_optimization(onnx_infer_file, embedding_dim, num_heads, input_shape)
+    print_onnx_shapes(onnx_infer_file)
     onnx_model = onnx.load(onnx_infer_file)
+
+
+    all_param_names = [init.name for init in onnx_model.graph.initializer]
+    print(f" All Parameters: {all_param_names}")
+
+    # requires_grad = [name for name in all_param_names if name in [
+    # 'classifier_norm_bias', 'classifier_norm_weight', 'classifier_attention_pool_weight', 'classifier_attention_pool_bias', 'classifier_fc_weight', 'classifier_blocks_0_pre_norm_bias', 'classifier_fc_bias', 'node_0_classifier_attention_pool_Transpose__0'
+    # ]]  
+    # requires_grad = [ name for name in all_param_names if "const" not in name]
+    
+    requires_grad = [name for name in all_param_names if name in [
+    'classifier_fc_weight'
+    ]]  
+
+    # requires_grad = [name for name in all_param_names if name in [
+    # 'node_0_classifier_blocks_0_linear1_Transpose__0', 'classifier_blocks_0_linear1_bias', 'node_0_classifier_blocks_0_linear2_Transpose__0'
+    # ]]  
+    # requires_grad = [name for name in all_param_names if name in [
+    # 'node_0_classifier_blocks_0_self_attn_q_proj_Transpose__0', 'node_0_classifier_blocks_0_self_attn_k_proj_Transpose__0', 'node_0_classifier_blocks_0_self_attn_v_proj_Transpose__0', 
+    # 'node_0_classifier_blocks_0_self_attn_proj_Transpose__0'
+    # ]]  
+
+    frozen_params = [name for name in all_param_names if name not in requires_grad]
+    
+    print(f"🔹 Training Only: {requires_grad}")
+    print(f"🔹 Frozen Parameters: {frozen_params}")
+
 
     # Generate artifacts for training
     artifacts.generate_artifacts(
         onnx_model,
-        optimizer=artifacts.OptimType.AdamW,
+        optimizer=artifacts.OptimType.SGD,
         loss=artifacts.LossType.CrossEntropyLoss,
-        requires_grad=requires_grad,  # Only classifier.fc.weight is trainable
-        frozen_params=frozen_params,  # Freeze all others
+        requires_grad=requires_grad,
+        frozen_params=frozen_params,  
         artifact_directory=base_path,
-        additional_output_names=["output"]
+
     )
 
     training_model_path = os.path.join(base_path, "training_model.onnx")
     if os.path.exists(training_model_path):
         os.rename(training_model_path, onnx_train_file)
         print(f"✅ Final Training ONNX model saved as {onnx_train_file}")
+
+    # load the training model
+    onnx_model = onnx.load(onnx_train_file)
+    graph = onnx_model.graph
+    grad_tensor_names = [ name + '_grad' for name in requires_grad ]
     
+
+    for grad_name in grad_tensor_names:
+        if not any(output.name == grad_name for output in graph.output):
+
+            grad_output = helper.make_tensor_value_info(grad_name, onnx.TensorProto.FLOAT, None)
+            graph.output.append(grad_output)  
+    onnx.save(onnx_model, onnx_train_optim)
+    onnx.save(onnx_model, onnx_train_file)
+
+    # Run optimization on the training model
+    onnx_output_file = os.path.join(base_path, "network.onnx")
+    run_train_onnx_optimization(onnx_train_optim, onnx_output_file)
+    infer_shapes_with_custom_ops(onnx_output_file, onnx_output_file)
+    rename_nodes(onnx_output_file, onnx_output_file)
+    print_onnx_shapes(onnx_output_file)
+   
+    print(f"✅ Training ONNX model saved to {onnx_output_file}")
 
 
 if __name__ == "__main__":
