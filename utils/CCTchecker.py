@@ -64,19 +64,26 @@ def infer_model(model_path, input_data):
     output_names = [output.name for output in session.get_outputs()]
     return dict(zip(output_names, outputs))
 
-def main(output_node_name, model_path="/app/Onnx4Deeploy/Tests/Models/CCT/onnx/CCT_train_16_8_1_1/network_train.onnx", input_path="/app/Onnx4Deeploy/Tests/Models/CCT/onnx/CCT_train_16_8_1_1/inputs.npz", save_path="trimmed_network.onnx"):
+def main(output_node_name, model_path="/app/Onnx4Deeploy/Tests/Models/CCT/onnx/CCT_train_16_8_1_1/network_train.onnx", input_path="/app/Deeploy/DeeployTest/Tests/testTrainCCT/CCT_Classifier_Weight_1/inputs.npz", save_path="trimmed_network.onnx"):
+    
+    model = onnx.load(model_path)
+    for node in model.graph.node:
+        print(node.name)
+        
     trimmed_model = trim_onnx_model(model_path, output_node_name, save_path)
     
     input_data = np.load(input_path)
+
+
     
     result_dict = infer_model(save_path, input_data)
     
-    for name, output in result_dict.items():
-        print(f"{name} Output Shape:", output.shape)
     
     np.set_printoptions(threshold=np.inf, linewidth=200, suppress=True)
 
     output = list(result_dict.values())[0]
+    print("\nInput:")
+    print(input_data['input'])
     print("\nOutput:")
     print(output)
     # for name, output in result_dict.items():

@@ -10,8 +10,8 @@ import onnxruntime.tools
 from onnxruntime.tools import symbolic_shape_infer
 import copy
 from .fixshape import print_onnx_shapes
-from .trainoptimization import run_optmization_remove_biasgelu, fix_layernorm_version, modify_conflict_outputs, convert_squeeze_input_to_attr, add_c_to_gemm, optimize_reshape_fusion, \
-remove_identity_reducesum
+from .trainoptimization import *
+import random
 
 def make_c_name(name, count=0):
     if name.lower() in ["input", "output"]:
@@ -124,7 +124,7 @@ def run_train_onnx_optimization(onnx_train_file, onnx_output_file):
     modify_conflict_outputs(onnx_train_file, onnx_train_file)
     print(f"✅ Successfully removed all second outputs from Layernorm and Maxpool nodes. Saved as {onnx_output_file}")
 
-    convert_squeeze_input_to_attr(onnx_train_file, onnx_train_file)
+    convert_squeeze_unsqueeze_input_to_attr(onnx_train_file, onnx_train_file)
     print(f"✅ Successfully converted Squeeze inputs to attributes. Saved as {onnx_output_file}")
 
     add_c_to_gemm(onnx_train_file, onnx_output_file)
@@ -132,6 +132,18 @@ def run_train_onnx_optimization(onnx_train_file, onnx_output_file):
 
     remove_identity_reducesum(onnx_output_file, onnx_output_file)
     print(f"✅ Successfully removed Identity and ReduceSum nodes. Saved as {onnx_output_file}")
+
+    convert_reducesum_axes_to_attr(onnx_output_file, onnx_output_file)
+    print(f"✅ Successfully converted ReduceSum axes to attributes. Saved as {onnx_output_file}")
+
+    convert_fusedmatmul_to_gemm(onnx_output_file, onnx_output_file)
+    print(f"✅ Successfully converted FusedMatMul to Gemm nodes. Saved as {onnx_output_file}")
+
+    convert_sum_to_add(onnx_output_file, onnx_output_file)
+    print(f"✅ Successfully converted Sum to Add nodes. Saved as {onnx_output_file}")
+
+    rename_softmaxgrad_op(onnx_output_file, onnx_output_file)
+    print(f"✅ Successfully renamed SoftmaxGrad nodes. Saved as {onnx_output_file}")
 
     print_onnx_shapes(onnx_output_file)
 
@@ -239,4 +251,62 @@ def randomize_layernorm_params(model):
                 module.weight.data = module.weight.data + torch.randn_like(module.weight.data) * 1e-6
                 module.bias.data = module.bias.data + torch.randn_like(module.bias.data) * 1e-6
                 
+    return model
+
+def randomize_onnx_initializers(model, seed=None, exclude_patterns=None):
+    if seed is not None:
+        np.random.seed(seed)
+        random.seed(seed)
+    
+    if exclude_patterns is None:
+        exclude_patterns = ["const", "shape", "Constant"]
+    
+    graph = model.graph
+    
+    modified_count = 0
+    zero_count = 0
+    skipped_count = 0
+    
+    for initializer in graph.initializer:
+        # Skip initializers with specific patterns in their names
+        if any(pattern in initializer.name for pattern in exclude_patterns):
+            skipped_count += 1
+            continue
+        
+        # Convert initializer to numpy array
+        np_array = numpy_helper.to_array(initializer)
+        
+        # Check if array contains only zeros
+        if np.all(np_array == 0):
+            zero_count += 1
+            
+            # Determine appropriate scale based on tensor dimension and type
+            if np_array.dtype == np.float32 or np_array.dtype == np.float64:
+                # Use Kaiming/He initialization for weights
+                if len(np_array.shape) > 1:
+                    fan_in = np_array.shape[0]
+                    scale = np.sqrt(2.0 / fan_in)
+                    np_array = np.random.normal(0, scale, np_array.shape).astype(np_array.dtype)
+                else:
+                    # For bias terms or 1D tensors
+                    np_array = np.random.uniform(-0.1, 0.1, np_array.shape).astype(np_array.dtype)
+            elif np_array.dtype == np.int64 or np_array.dtype == np.int32:
+                # For integer tensors (e.g., indices)
+                max_val = min(100, 2**(np_array.itemsize*8 - 1) - 1)  # Avoid overflow
+                np_array = np.random.randint(-max_val, max_val, np_array.shape).astype(np_array.dtype)
+            
+            # Create new tensor from modified numpy array
+            new_tensor = numpy_helper.from_array(np_array, initializer.name)
+            
+            # Replace original initializer with new tensor
+            initializer.CopyFrom(new_tensor)
+            modified_count += 1
+    
+    
+    print(f"Randomization complete:")
+    print(f"- Total initializers: {len(graph.initializer)}")
+    print(f"- Zero initializers found and randomized: {zero_count}")
+    print(f"- Skipped initializers (based on patterns): {skipped_count}")
+    print(f"- Modified initializers: {modified_count}")
+    
     return model

@@ -1,0 +1,2 @@
+softmax_grad:
+  input_shape: [16, 10] 

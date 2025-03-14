@@ -371,7 +371,15 @@ def modify_conflict_outputs(input_model_path, output_model_path):
     onnx.save(model, output_model_path)
     print(f"Saved to: {output_model_path}")
     
-def convert_squeeze_input_to_attr(input_model_path, output_model_path):
+def convert_squeeze_unsqueeze_input_to_attr(input_model_path, output_model_path):
+    """
+    Convert Squeeze and Unsqueeze nodes with axes as input to axes as attribute.
+    This is useful for compatibility with older ONNX versions where axes was only supported as an attribute.
+    
+    Args:
+        input_model_path: Path to the input ONNX model
+        output_model_path: Path to save the converted ONNX model
+    """
     model = onnx.load(input_model_path)
     
     modified_nodes = []
@@ -380,7 +388,8 @@ def convert_squeeze_input_to_attr(input_model_path, output_model_path):
     initializers = {init.name: init for init in model.graph.initializer}
     
     for node in model.graph.node:
-        if node.op_type == 'Squeeze' and len(node.input) > 1:
+        # Check if the node is Squeeze or Unsqueeze with more than one input
+        if (node.op_type in ['Squeeze', 'Unsqueeze']) and len(node.input) > 1:
             modified_count += 1
             
             data_input = node.input[0]
@@ -388,43 +397,53 @@ def convert_squeeze_input_to_attr(input_model_path, output_model_path):
             axes_input_name = node.input[1]
             
             if axes_input_name in initializers:
+                # Get the axes values from the initializer
                 axes_initializer = initializers[axes_input_name]
                 axes_np = numpy_helper.to_array(axes_initializer)
                 axes_list = axes_np.tolist()
                 
+                # Make the axes a scalar if it's a single value
+                if isinstance(axes_list, list) and len(axes_list) == 1:
+                    axes_list = axes_list[0]
+                
+                # Create a new node with axes as attribute instead of input
                 new_node = helper.make_node(
-                    op_type='Squeeze',
+                    op_type=node.op_type,
                     inputs=[data_input],  
                     outputs=list(node.output),
                     name=node.name,
                     axes=axes_list 
                 )
                 
-            
+                # Copy other attributes if they exist
                 for attr in node.attribute:
-                    if attr.name != 'axes': 
+                    if attr.name != 'axes':
                         new_node.attribute.append(attr)
                 
                 modified_nodes.append(new_node)
             else:
-               
+                # If we can't find the axes initializer, keep the original node
                 print(f"Warning: Cannot find '{node.name}' axes initializer. Keep the original node.")
                 modified_nodes.append(node)
         else:
-          
+            # Keep all other nodes as they are
             modified_nodes.append(node)
     
-    print(f"Modified {modified_count} Squeeze")
+    print(f"Modified {modified_count} Squeeze/Unsqueeze nodes")
+    
+    # Identify initializers that are no longer referenced
+    # This happens when we convert the axes from input to attribute
+    used_inputs = set()
+    for node in modified_nodes:
+        for input_name in node.input:
+            used_inputs.add(input_name)
     
     unused_initializers = set()
-    for node in modified_nodes:
-        if node.op_type == 'Squeeze' and len(node.input) == 1:
-        
-            for init in model.graph.initializer:
-                if init.name not in [inp for node in modified_nodes for inp in node.input]:
-                    unused_initializers.add(init.name)
+    for init in model.graph.initializer:
+        if init.name not in used_inputs:
+            unused_initializers.add(init.name)
     
-
+    # Create a new graph with the modified nodes and without unused initializers
     new_graph = helper.make_graph(
         nodes=modified_nodes,
         name=model.graph.name,
@@ -433,11 +452,11 @@ def convert_squeeze_input_to_attr(input_model_path, output_model_path):
         initializer=[init for init in model.graph.initializer if init.name not in unused_initializers]
     )
     
-   
+    # Copy over value_info from the original model
     for vi in model.graph.value_info:
         new_graph.value_info.append(vi)
     
-   
+    # Create a new model with the updated graph
     new_model = helper.make_model(
         new_graph,
         producer_name=model.producer_name,
@@ -447,11 +466,11 @@ def convert_squeeze_input_to_attr(input_model_path, output_model_path):
         doc_string=model.doc_string
     )
     
-
+    # Copy over IR version and opset imports
     new_model.ir_version = model.ir_version
     new_model.opset_import.extend(model.opset_import)
     
-
+    # Save the model
     onnx.save(new_model, output_model_path)
     print(f"Saved to {output_model_path}")
     
@@ -803,3 +822,395 @@ def remove_identity_reducesum(input_model_path, output_model_path):
     print(f"Removed {len(nodes_to_remove)}  Identity or ReduceSum")
     
     return model
+
+
+def convert_reducesum_axes_to_attr(input_file: str, output_file: str):
+    model = onnx.load(input_file)
+    graph = model.graph
+    
+    new_nodes = []
+    
+    initializers = {init.name: init for init in graph.initializer}
+    
+    for node in graph.node:
+        if node.op_type == "ReduceSum":
+            if len(node.input) >= 2:
+                data_input = node.input[0]
+                axes_input = node.input[1]
+                
+                if axes_input in initializers:
+                    axes_tensor = initializers[axes_input]
+                    axes_np = numpy_helper.to_array(axes_tensor)
+                    axes_list = axes_np.tolist()
+                    
+                    new_node = helper.make_node(
+                        op_type="ReduceSum",
+                        inputs=[data_input],
+                        outputs=node.output,
+                        name=node.name,
+                        axes=axes_list
+                    )
+                    
+                    for attr in node.attribute:
+                        if attr.name != "axes":
+                            new_node.attribute.append(attr)
+                    
+                    new_nodes.append(new_node)
+                else:
+                    new_nodes.append(node)
+            else:
+                new_nodes.append(node)
+        else:
+            new_nodes.append(node)
+    
+    new_graph = helper.make_graph(
+        nodes=new_nodes,
+        name=graph.name,
+        inputs=graph.input,
+        outputs=graph.output,
+        initializer=graph.initializer,
+        value_info=graph.value_info
+    )
+    
+    new_model = helper.make_model(
+        new_graph,
+        producer_name="ReduceSumAxesConverter",
+        ir_version=model.ir_version,
+        opset_imports=model.opset_import
+    )
+    
+    new_model.metadata_props.extend(model.metadata_props)
+    
+    for domain in model.domain:
+        new_model.domain.append(domain)
+    
+    onnx.save(new_model, output_file)
+    print(f"Model converted and saved to: {output_file}")
+
+
+def convert_fusedmatmul_to_gemm(input_model_path, output_model_path):
+    """
+    Convert Microsoft's FusedMatMul nodes to standard Gemm nodes in an ONNX model.
+    This function handles custom ops and adds a zero tensor for the C input of Gemm when needed.
+    The three inputs to Gemm will be named A, B, and C in the function implementation.
+    
+    Args:
+        input_model_path: Path to the input ONNX model
+        output_model_path: Path to save the converted ONNX model
+    """
+    # Load the model
+    model = onnx.load(input_model_path)
+    
+    # Track necessary changes
+    new_nodes = []
+    new_initializers = []
+    
+    # Process each node in the graph
+    for node in model.graph.node:
+        # Check if the node is a FusedMatMul from Microsoft domain
+        if node.op_type == "FusedMatMul" and node.domain == "com.microsoft":
+            # Extract attributes from FusedMatMul
+            alpha = 1.0
+            transA = 0
+            transB = 0
+            
+            for attr in node.attribute:
+                if attr.name == "alpha":
+                    alpha = attr.f
+                elif attr.name == "transA":
+                    transA = attr.i
+                elif attr.name == "transB":
+                    transB = attr.i
+            
+            # Get inputs and output of FusedMatMul
+            # In our implementation, we'll call these A and B
+            A = node.input[0]
+            B = node.input[1]
+            output = node.output[0]
+            
+            # Create a name for the zero tensor (C input for Gemm)
+            C = f"{output}_zero_bias"
+            
+            # To determine the shape of C, we need to find the output shape
+            # For this, we need to analyze the graph and infer shapes
+            
+            a_shape = None
+            b_shape = None
+            
+            # Try to find shapes from value_info or initializers
+            for vi in model.graph.value_info:
+                if vi.name == A:
+                    a_shape = [dim.dim_value for dim in vi.type.tensor_type.shape.dim]
+                elif vi.name == B:
+                    b_shape = [dim.dim_value for dim in vi.type.tensor_type.shape.dim]
+            
+            # Check initializers if shapes not found in value_info
+            if a_shape is None or b_shape is None:
+                for init in model.graph.initializer:
+                    if init.name == A:
+                        a_shape = list(init.dims)
+                    elif init.name == B:
+                        b_shape = list(init.dims)
+            
+            # If we couldn't determine exact shapes, use a placeholder approach
+            if a_shape and b_shape:
+                # Calculate output shape based on MatMul rules and transA/transB
+                if transA:
+                    a_shape = a_shape[::-1]
+                if transB:
+                    b_shape = b_shape[::-1]
+                
+                # For matmul: [M,K] * [K,N] = [M,N]
+                # The bias/C needs to be shape [N]
+                c_shape = [b_shape[-1]]
+            else:
+                # If we can't determine shapes, we'll add a placeholder initializer
+                c_shape = [1]  # Placeholder
+            
+            # Create a zero tensor for C input
+            zero_tensor = numpy_helper.from_array(
+                np.zeros(c_shape, dtype=np.float32),
+                name=C
+            )
+            new_initializers.append(zero_tensor)
+            
+            # Create the Gemm node
+            gemm_node = helper.make_node(
+                "Gemm",
+                inputs=[A, B, C],  # Using A, B, C naming convention
+                outputs=[output],
+                name=f"{node.name}_gemm",
+                alpha=alpha,
+                beta=1.0,  # Standard beta value
+                transA=transA,
+                transB=transB
+            )
+            
+            new_nodes.append(gemm_node)
+        else:
+            # Keep other nodes as they are
+            new_nodes.append(node)
+    
+    # Create a new graph with updated nodes and initializers
+    new_graph = helper.make_graph(
+        nodes=new_nodes,
+        name=model.graph.name,
+        inputs=model.graph.input,
+        outputs=model.graph.output,
+        initializer=list(model.graph.initializer) + new_initializers,
+        value_info=model.graph.value_info
+    )
+    
+    # Create a new model with the updated graph
+    # Preserve opset imports and other model metadata
+    new_model = helper.make_model(
+        new_graph,
+        producer_name="FusedMatMul2Gemm",
+        opset_imports=model.opset_import,
+        ir_version=model.ir_version
+    )
+    
+    # Copy domain information for custom ops
+    for domain in model.domain:
+        new_model.domain.append(domain)
+    
+    # Copy model metadata
+    new_model.metadata_props.extend(model.metadata_props)
+
+    # Save the new model
+    onnx.save(new_model, output_model_path)
+    print(f"Converted model saved to {output_model_path}")
+    
+    return new_model
+
+def convert_sum_to_add(input_model_path, output_model_path):
+    """
+    Convert Sum operators to Add operators in an ONNX model.
+    Sum operator can take multiple inputs, while Add takes exactly two inputs.
+    This function breaks down Sum operators with >2 inputs into a series of Add operators.
+    
+    Args:
+        input_model_path: Path to the input ONNX model
+        output_model_path: Path to save the converted ONNX model
+    """
+    # Load the model
+    model = onnx.load(input_model_path)
+    
+    # Track necessary changes
+    new_nodes = []
+    processed_nodes = set()
+    
+    # Process each node in the graph
+    for i, node in enumerate(model.graph.node):
+        # Skip already processed nodes
+        if i in processed_nodes:
+            continue
+            
+        # Check if the node is a Sum operator
+        if node.op_type == "Sum":
+            input_count = len(node.input)
+            
+            if input_count == 1:
+                # Sum with one input is just an Identity
+                identity_node = helper.make_node(
+                    "Identity",
+                    inputs=[node.input[0]],
+                    outputs=node.output,
+                    name=f"{node.name}_identity"
+                )
+                new_nodes.append(identity_node)
+            
+            elif input_count == 2:
+                # Sum with two inputs can be directly converted to Add
+                add_node = helper.make_node(
+                    "Add",
+                    inputs=[node.input[0], node.input[1]],
+                    outputs=node.output,
+                    name=f"{node.name}_add"
+                )
+                new_nodes.append(add_node)
+                
+            else:
+                # Sum with more than two inputs needs to be broken down into a series of Add operations
+                # We'll create intermediate outputs for all but the last Add
+                intermediate_outputs = []
+                
+                for j in range(input_count - 1):
+                    if j == 0:
+                        # First Add takes the first two inputs of Sum
+                        input1 = node.input[0]
+                        input2 = node.input[1]
+                    else:
+                        # Subsequent Adds take the output of the previous Add and the next input
+                        input1 = intermediate_outputs[-1]
+                        input2 = node.input[j + 1]
+                    
+                    # For the last Add, use the original output, otherwise create an intermediate output
+                    if j == input_count - 2:
+                        output = node.output[0]
+                    else:
+                        output = f"{node.name}_intermediate_{j}"
+                        intermediate_outputs.append(output)
+                    
+                    # Create the Add node
+                    add_node = helper.make_node(
+                        "Add",
+                        inputs=[input1, input2],
+                        outputs=[output],
+                        name=f"{node.name}_add_{j}"
+                    )
+                    new_nodes.append(add_node)
+            
+            # Mark this node as processed
+            processed_nodes.add(i)
+        else:
+            # Keep other nodes as they are
+            new_nodes.append(node)
+    
+    # Create a new graph with updated nodes
+    new_graph = helper.make_graph(
+        nodes=new_nodes,
+        name=model.graph.name,
+        inputs=model.graph.input,
+        outputs=model.graph.output,
+        initializer=model.graph.initializer,
+        value_info=model.graph.value_info
+    )
+    
+    # Create a new model with the updated graph
+    # Preserve opset imports and other model metadata
+    new_model = helper.make_model(
+        new_graph,
+        producer_name="SumToAddConverter",
+        opset_imports=model.opset_import,
+        ir_version=model.ir_version
+    )
+    
+    # Copy domain information for custom ops
+    for domain in model.domain:
+        new_model.domain.append(domain)
+    
+    # Copy model metadata
+    new_model.metadata_props.extend(model.metadata_props)
+    
+    # Save the new model
+    onnx.save(new_model, output_model_path)
+    print(f"Converted model saved to {output_model_path}")
+    
+    return new_model
+
+def rename_softmaxgrad_op(input_model_path: str, output_model_path: str, 
+                          old_op_name: str = "SoftmaxGrad_13", 
+                          new_op_name: str = "SoftmaxGrad"):
+    """
+    Rename Microsoft's custom operator SoftmaxGrad_13 to SoftmaxGrad.
+    
+    Args:
+        input_model_path: Path to the input ONNX model
+        output_model_path: Path to save the converted ONNX model
+        old_op_name: Original operator name (default: "SoftmaxGrad_13")
+        new_op_name: New operator name (default: "SoftmaxGrad")
+    """
+    model = onnx.load(input_model_path)
+    
+    modified_nodes = []
+    modified_count = 0
+    
+    # Process each node in the graph
+    for node in model.graph.node:
+        # Check if the node is the target Microsoft domain operator
+        if node.op_type == old_op_name and node.domain == "com.microsoft":
+            modified_count += 1
+            
+            # Create a new node with the updated op_type
+            new_node = helper.make_node(
+                op_type=new_op_name,
+                inputs=list(node.input),
+                outputs=list(node.output),
+                name=node.name,
+                domain=node.domain  # Keep the original domain
+            )
+            
+            # Copy all attributes from the original node
+            for attr in node.attribute:
+                new_node.attribute.append(attr)
+            
+            modified_nodes.append(new_node)
+        else:
+            # Keep all other nodes as they are
+            modified_nodes.append(node)
+    
+    print(f"Modified {modified_count} {old_op_name} nodes to {new_op_name}")
+    
+    # Create a new graph with the modified nodes
+    new_graph = helper.make_graph(
+        nodes=modified_nodes,
+        name=model.graph.name,
+        inputs=model.graph.input,
+        outputs=model.graph.output,
+        initializer=model.graph.initializer
+    )
+    
+    # Copy over value_info from the original model
+    for vi in model.graph.value_info:
+        new_graph.value_info.append(vi)
+    
+    # Create a new model with the updated graph
+    new_model = helper.make_model(
+        new_graph,
+        producer_name=model.producer_name,
+        producer_version=model.producer_version,
+        domain=model.domain,
+        model_version=model.model_version,
+        doc_string=model.doc_string
+    )
+    
+    # Copy over IR version and opset imports
+    new_model.ir_version = model.ir_version
+    new_model.opset_import.extend(model.opset_import)
+    
+    # Save the model
+    onnx.save(new_model, output_model_path)
+    print(f"Saved to {output_model_path}")
+    
+    return new_model
