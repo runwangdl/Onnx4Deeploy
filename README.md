@@ -7,4 +7,5 @@ The test directory in this project contains comprehensive test cases, primarily 
 
 - CCT model training graph optimization pipeline
 - Various operator unit tests
-- End-to-end inference performance benchmarks
+- End-to-end inference
+- End-to-end training
