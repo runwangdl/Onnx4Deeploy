@@ -28,6 +28,7 @@ def generate_cct_training_onnx(save_path=None):
     onnx_output_file = os.path.join(base_path, "network.onnx")
     onnx_train_optim = os.path.join(base_path, "network_train_optim.onnx")
 
+    # Create CCT model and randomize layer norm parameters
     model = cct_test(
         pretrained=pretrained, 
         img_size=img_size, 
@@ -66,12 +67,13 @@ def generate_cct_training_onnx(save_path=None):
     onnx.save(onnx_model, onnx_infer_file)
     print(f"✅ Inference ONNX model saved to {onnx_infer_file}")
 
+    # Run optimization on the inference model
     rename_and_save_onnx(onnx_infer_file, onnx_infer_file)
     run_onnx_optimization(onnx_infer_file, embedding_dim, num_heads, input_shape)
     print_onnx_shapes(onnx_infer_file)
     onnx_model = onnx.load(onnx_infer_file)
 
-
+    # Get all parameter names and require_grad names
     all_param_names = [init.name for init in onnx_model.graph.initializer]
     print(f" All Parameters: {all_param_names}")
 
@@ -130,6 +132,9 @@ def generate_cct_training_onnx(save_path=None):
             graph.output.append(grad_output)  
     onnx.save(onnx_model, onnx_train_optim)
     onnx.save(onnx_model, onnx_train_file)
+
+    # train file for generating golden model debug
+    # train_optim file for further optimization
 
     # Run optimization on the training model
     onnx_output_file = os.path.join(base_path, "network.onnx")

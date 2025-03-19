@@ -350,8 +350,8 @@ def modify_conflict_outputs(input_model_path, output_model_path):
     
     select_nodes = []
     for node in graph.node:
-        # if node.op_type == 'LayerNormalization' or node.op_type == 'MaxPool':
-        if node.op_type == 'MaxPool':
+        if node.op_type == 'LayerNormalization' or node.op_type == 'MaxPool':
+        # if node.op_type == 'MaxPool':
             select_nodes.append(node)
     
     print(f"Find {len(select_nodes)} Maxpool")
@@ -361,8 +361,8 @@ def modify_conflict_outputs(input_model_path, output_model_path):
     new_nodes = []
     
     for node in graph.node:
-        # if (node.op_type == 'LayerNormalization' or node.op_type == 'MaxPool') and len(node.output) > 1:
-        if (node.op_type == 'MaxPool') and len(node.output) > 1:
+        if (node.op_type == 'LayerNormalization' or node.op_type == 'MaxPool') and len(node.output) > 1:
+        # if (node.op_type == 'MaxPool') and len(node.output) > 1:
             outputs_to_remove.extend(node.output[1:])
             
             new_node = onnx.NodeProto()
@@ -1323,3 +1323,114 @@ def rename_softmaxgrad_op(input_model_path: str, output_model_path: str,
     print(f"Saved to {output_model_path}")
     
     return new_model
+
+def remove_softmax_loss_outputs(input_model_path, output_model_path):
+    """
+    Remove loss outputs from SoftmaxCrossEntropyLoss nodes, keeping only the log probability output.
+    
+    Args:
+        input_model_path (str): Path to the input ONNX model
+        output_model_path (str): Path to save the modified ONNX model
+    """
+    import onnx
+    
+    # Load the model
+    model = onnx.load(input_model_path)
+    graph = model.graph
+    
+    # Find SoftmaxCrossEntropyLoss nodes
+    target_nodes = []
+    for node in graph.node:
+        if node.op_type == 'SoftmaxCrossEntropyLoss':
+            target_nodes.append(node)
+    
+    print(f"Found {len(target_nodes)} SoftmaxCrossEntropyLoss nodes")
+    
+    # Outputs to remove (first output - loss)
+    outputs_to_remove = []
+    
+    # Create new nodes with modified outputs
+    new_nodes = []
+    for node in graph.node:
+        if node.op_type == 'SoftmaxCrossEntropyLoss' and len(node.output) > 1:
+            # Keep only the second output (log probabilities) and remove the first (loss)
+            outputs_to_remove.append(node.output[0])
+            
+            # Create a new node with only the second output
+            new_node = onnx.NodeProto()
+            new_node.CopyFrom(node)
+            log_prob_output = node.output[1]
+            
+            # Clear outputs and set only the log probability output
+            del new_node.output[:]
+            new_node.output.append(log_prob_output)
+            
+            new_nodes.append(new_node)
+        else:
+            # Keep other nodes unchanged
+            new_nodes.append(node)
+    
+    # Replace all nodes with the new set
+    del graph.node[:]
+    graph.node.extend(new_nodes)
+    
+    # Filter graph outputs to remove loss outputs
+    new_outputs = []
+    for output in graph.output:
+        if output.name not in outputs_to_remove:
+            new_outputs.append(output)
+    
+    # Replace graph outputs with filtered list
+    del graph.output[:]
+    graph.output.extend(new_outputs)
+    
+    # Save the modified model
+    onnx.save(model, output_model_path)
+    print(f"Saved model with loss outputs removed to: {output_model_path}")
+
+def remove_softmax_grad_loss_inputs(input_model_path, output_model_path):
+    
+    # Load the model
+    model = onnx.load(input_model_path)
+    graph = model.graph
+    
+    # Find SoftmaxCrossEntropyLossGrad nodes
+    target_nodes = []
+    for node in graph.node:
+        if node.op_type == 'SoftmaxCrossEntropyLossGrad':
+            target_nodes.append(node)
+    
+    print(f"Found {len(target_nodes)} SoftmaxCrossEntropyLossGrad nodes")
+    
+    # Inputs to remove (first input)
+    inputs_to_remove = []
+    
+    # Create new nodes with modified inputs
+    new_nodes = []
+    for node in graph.node:
+        if node.op_type == 'SoftmaxCrossEntropyLossGrad' and len(node.input) > 2:
+            # Remove the first input and keep the rest
+            first_input = node.input[0]
+            inputs_to_remove.append(first_input)
+            
+            # Create a new node without the first input
+            new_node = onnx.NodeProto()
+            new_node.CopyFrom(node)
+            
+            # Keep only the second and third inputs
+            remaining_inputs = list(node.input[1:])
+            del new_node.input[:]
+            new_node.input.extend(remaining_inputs)
+            
+            new_nodes.append(new_node)
+        else:
+            # Keep other nodes unchanged
+            new_nodes.append(node)
+    
+    # Replace all nodes with the new set
+    del graph.node[:]
+    graph.node.extend(new_nodes)
+    
+    # Save the modified model
+    onnx.save(model, output_model_path)
+    print(f"Saved model with SoftmaxCrossEntropyLossGrad first input removed to: {output_model_path}")

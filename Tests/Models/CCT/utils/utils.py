@@ -16,7 +16,7 @@ import random
 def make_c_name(name, count=0):
     if name.lower() in ["input", "output"]:
         return name  # Keep 'input' and 'output' as is
-    
+
     name = re.sub(r'input|output', '', name, flags=re.IGNORECASE)  # Remove 'input' and 'output' from other names
     name = re.sub(r'[^a-zA-Z0-9_]', '_', name)
     if name[0].isdigit() or name[0] == '_':
@@ -40,7 +40,7 @@ def rename_onnx_nodes(model):
 
     for init in model.graph.initializer:
         init.name = make_c_name(init.name)
-    
+
     return model
 
 def rename_and_save_onnx(input_onnx, output_onnx):
@@ -96,7 +96,7 @@ def load_config(config_filename="../config.yaml"):
 
     with open(config_file, "r") as f:
         config = yaml.safe_load(f).get("cct", {})
-    
+
     return (
         config["pretrained"],
         config["img_size"],
@@ -108,43 +108,69 @@ def load_config(config_filename="../config.yaml"):
         config.get("opset_version", 12)  # Default value for opset_version
     )
 
+
 def run_train_onnx_optimization(onnx_train_file, onnx_output_file):
     # remove the second output of maxpool
     print(f"🔹 Running optimization for {onnx_train_file}...")
-  
+
     run_optmization_remove_biasgelu(onnx_train_file, onnx_train_file)
     print(f"✅ Successfully removed BiasGeluFusion. Saved as {onnx_train_file}")
 
     fix_layernorm_output(onnx_train_file, onnx_train_file)
-    print(f"✅ Successfully fixed LayerNormalization opset version. Saved as {onnx_train_file}")
+    print(
+        f"✅ Successfully fixed LayerNormalization opset version. Saved as {onnx_train_file}"
+    )
 
     optimize_reshape_fusion(onnx_train_file, onnx_train_file)
-    print(f"✅ Successfully optimized Reshape nodes. Saved as {onnx_output_file}")
+    print(
+        f"✅ Successfully optimized Reshape nodes. Saved as {onnx_output_file}")
 
     modify_conflict_outputs(onnx_train_file, onnx_train_file)
-    print(f"✅ Successfully removed all second outputs from Maxpool nodes. Saved as {onnx_output_file}")
+    print(
+        f"✅ Successfully removed all second outputs from Maxpool nodes. Saved as {onnx_output_file}"
+    )
 
     convert_squeeze_unsqueeze_input_to_attr(onnx_train_file, onnx_train_file)
-    print(f"✅ Successfully converted Squeeze inputs to attributes. Saved as {onnx_output_file}")
+    print(
+        f"✅ Successfully converted Squeeze inputs to attributes. Saved as {onnx_output_file}"
+    )
 
     add_c_to_gemm(onnx_train_file, onnx_output_file)
     print(f"✅ Successfully added C to Gemm nodes. Saved as {onnx_output_file}")
 
     remove_identity_reducesum(onnx_output_file, onnx_output_file)
-    print(f"✅ Successfully removed Identity and ReduceSum nodes. Saved as {onnx_output_file}")
+    print(
+        f"✅ Successfully removed Identity and ReduceSum nodes. Saved as {onnx_output_file}"
+    )
 
     convert_reducesum_axes_to_attr(onnx_output_file, onnx_output_file)
-    print(f"✅ Successfully converted ReduceSum axes to attributes. Saved as {onnx_output_file}")
+    print(
+        f"✅ Successfully converted ReduceSum axes to attributes. Saved as {onnx_output_file}"
+    )
 
     convert_fusedmatmul_to_gemm(onnx_output_file, onnx_output_file)
-    print(f"✅ Successfully converted FusedMatMul to Gemm nodes. Saved as {onnx_output_file}")
+    print(
+        f"✅ Successfully converted FusedMatMul to Gemm nodes. Saved as {onnx_output_file}"
+    )
 
     convert_sum_to_add(onnx_output_file, onnx_output_file)
-    print(f"✅ Successfully converted Sum to Add nodes. Saved as {onnx_output_file}")
+    print(
+        f"✅ Successfully converted Sum to Add nodes. Saved as {onnx_output_file}"
+    )
 
     rename_softmaxgrad_op(onnx_output_file, onnx_output_file)
-    print(f"✅ Successfully renamed SoftmaxGrad nodes. Saved as {onnx_output_file}")
+    print(
+        f"✅ Successfully renamed SoftmaxGrad nodes. Saved as {onnx_output_file}"
+    )
 
+    remove_softmax_loss_outputs(onnx_output_file, onnx_output_file)
+    print(f"✅ Successfully removed Softmax Loss outputs. Saved as {onnx_output_file}")
+
+    remove_softmax_grad_loss_inputs(onnx_output_file, onnx_output_file)
+    print(
+        f"✅ Successfully removed Softmax Grad Loss inputs. Saved as {onnx_output_file}"
+    )
+    
     print_onnx_shapes(onnx_output_file)
 
 def rename_nodes(model_path, output_path):
@@ -158,10 +184,10 @@ def rename_nodes(model_path, output_path):
     """
     # Load the model
     model = onnx.load(model_path)
-    
+
     # Create a map to store original to new name mappings
     name_map = {}
-    
+
     # Helper function to replace invalid C variable name characters with underscores
     def clean_name(name):
         if name is None:
@@ -172,34 +198,34 @@ def rename_nodes(model_path, output_path):
         if cleaned and cleaned[0].isdigit():
             cleaned = '_' + cleaned
         return cleaned
-    
+
     # Process graph inputs
     for input in model.graph.input:
         if input.name:
             new_name = clean_name(input.name)
             name_map[input.name] = new_name
             input.name = new_name
-    
+
     # Process graph outputs
     for output in model.graph.output:
         if output.name:
             new_name = clean_name(output.name)
             name_map[output.name] = new_name
             output.name = new_name
-    
+
     # Process initializers
     for initializer in model.graph.initializer:
         if initializer.name:
             new_name = clean_name(initializer.name)
             name_map[initializer.name] = new_name
             initializer.name = new_name
-    
+
     # Process nodes
     for node in model.graph.node:
         # Rename node name if it exists
         if node.name:
             node.name = clean_name(node.name)
-        
+
         # Rename node inputs
         for i, input_name in enumerate(node.input):
             if input_name in name_map:
@@ -209,7 +235,7 @@ def rename_nodes(model_path, output_path):
                 if new_name != input_name:
                     name_map[input_name] = new_name
                     node.input[i] = new_name
-        
+
         # Rename node outputs
         for i, output_name in enumerate(node.output):
             if output_name in name_map:
@@ -219,7 +245,7 @@ def rename_nodes(model_path, output_path):
                 if new_name != output_name:
                     name_map[output_name] = new_name
                     node.output[i] = new_name
-        
+
         # Rename attribute names if they contain node names
         for attribute in node.attribute:
             if attribute.type == onnx.AttributeProto.GRAPH:
@@ -231,17 +257,17 @@ def rename_nodes(model_path, output_path):
                     s_str = s.decode('utf-8') if isinstance(s, bytes) else s
                     if s_str in name_map:
                         attribute.strings[i] = name_map[s_str].encode('utf-8')
-    
+
     # Check for any value_info that might need renaming
     for value_info in model.graph.value_info:
         if value_info.name:
             new_name = clean_name(value_info.name)
             name_map[value_info.name] = new_name
             value_info.name = new_name
-    
+
     # Save the updated model
     onnx.save(model, output_path)
-    
+
     return name_map
 
 def randomize_layernorm_params(model):
@@ -250,36 +276,36 @@ def randomize_layernorm_params(model):
             with torch.no_grad():
                 module.weight.data = module.weight.data + torch.randn_like(module.weight.data) * 1e-6
                 module.bias.data = module.bias.data + torch.randn_like(module.bias.data) * 1e-6
-                
+
     return model
 
 def randomize_onnx_initializers(model, seed=None, exclude_patterns=None):
     if seed is not None:
         np.random.seed(seed)
         random.seed(seed)
-    
+
     if exclude_patterns is None:
         exclude_patterns = ["const", "shape", "Constant"]
-    
+
     graph = model.graph
-    
+
     modified_count = 0
     zero_count = 0
     skipped_count = 0
-    
+
     for initializer in graph.initializer:
         # Skip initializers with specific patterns in their names
         if any(pattern in initializer.name for pattern in exclude_patterns):
             skipped_count += 1
             continue
-        
+
         # Convert initializer to numpy array
         np_array = numpy_helper.to_array(initializer)
-        
+
         # Check if array contains only zeros
         if np.all(np_array == 0):
             zero_count += 1
-            
+
             # Determine appropriate scale based on tensor dimension and type
             if np_array.dtype == np.float32 or np_array.dtype == np.float64:
                 # Use Kaiming/He initialization for weights
@@ -294,19 +320,19 @@ def randomize_onnx_initializers(model, seed=None, exclude_patterns=None):
                 # For integer tensors (e.g., indices)
                 max_val = min(100, 2**(np_array.itemsize*8 - 1) - 1)  # Avoid overflow
                 np_array = np.random.randint(-max_val, max_val, np_array.shape).astype(np_array.dtype)
-            
+
             # Create new tensor from modified numpy array
             new_tensor = numpy_helper.from_array(np_array, initializer.name)
-            
+
             # Replace original initializer with new tensor
             initializer.CopyFrom(new_tensor)
             modified_count += 1
-    
-    
+
+
     print(f"Randomization complete:")
     print(f"- Total initializers: {len(graph.initializer)}")
     print(f"- Zero initializers found and randomized: {zero_count}")
     print(f"- Skipped initializers (based on patterns): {skipped_count}")
     print(f"- Modified initializers: {modified_count}")
-    
+
     return model
