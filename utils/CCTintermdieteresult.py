@@ -178,11 +178,14 @@ def save_initializers_to_file(initializers, save_dir="node_outputs"):
     
     # Save each initializer
     for name, array in initializers.items():
+        # Replace slashes in the filename with underscores
+        safe_name = name.replace("/", "_")
+        
         # Save as numpy file
-        np.save(os.path.join(initializers_dir, f"{name}.npy"), array)
+        np.save(os.path.join(initializers_dir, f"{safe_name}.npy"), array)
         
         # Save a preview text file
-        with open(os.path.join(initializers_dir, f"{name}_preview.txt"), "w") as f:
+        with open(os.path.join(initializers_dir, f"{safe_name}_preview.txt"), "w") as f:
             f.write(f"Initializer: {name}\n")
             f.write(f"Shape: {array.shape}\n")
             f.write(f"Type: {array.dtype}\n\n")
@@ -216,16 +219,21 @@ def save_outputs_to_file(results, save_dir="node_outputs"):
     
     # Save the actual output arrays
     for node_name, outputs in results.items():
-        node_dir = os.path.join(save_dir, node_name)
+        # Replace slashes in node name with underscores for directory name
+        safe_node_name = node_name.replace("/", "_")
+        node_dir = os.path.join(save_dir, safe_node_name)
         os.makedirs(node_dir, exist_ok=True)
         
         # Save each output tensor
         for output_name, output in outputs.items():
+            # Replace slashes in output name with underscores for file name
+            safe_output_name = output_name.replace("/", "_")
+            
             # Save as numpy file
-            np.save(os.path.join(node_dir, f"{output_name}.npy"), output)
+            np.save(os.path.join(node_dir, f"{safe_output_name}.npy"), output)
             
             # Save a preview text file with limited data
-            with open(os.path.join(node_dir, f"{output_name}_preview.txt"), "w") as f:
+            with open(os.path.join(node_dir, f"{safe_output_name}_preview.txt"), "w") as f:
                 f.write(f"Full data:\n{output}\n")
 
 def print_initializers(initializers, max_elements=20):
@@ -316,9 +324,9 @@ def main(model_path, input_path, save_dir="node_outputs", print_to_console=True)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Extract outputs from all nodes and initializers in an ONNX model.")
-    parser.add_argument("--model", type=str, default="/app/Onnx4Deeploy/Tests/Models/CCT/onnx/CCT_train_16_8_1_1/network_train.onnx", 
+    parser.add_argument("--model", type=str, default="/app/Onnx4Deeploy/Tests/Models/CCT/onnx/CCT_train_8_3_1_1/network_train.onnx", 
                         help="Path to the ONNX model")
-    parser.add_argument("--input", type=str, default="/app/Deeploy/DeeployTest/Tests/testTrainCCT/CCT_Classifier_Weight_1/inputs.npz",
+    parser.add_argument("--input", type=str, default="/app/Onnx4Deeploy/Tests/Models/CCT/onnx/CCT_train_8_3_1_1/inputs.npz",
                         help="Path to the input data (NPZ format)")
     parser.add_argument("--output_dir", type=str, default="node_outputs",
                         help="Directory to save the node outputs and initializers")

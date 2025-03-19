@@ -218,113 +218,130 @@ def replace_biasgelu_with_gelu_add(input_model_path, output_model_path):
     
     return new_model
 
-def fix_layernorm_version(input_model_path, output_model_path, target_opset=13):
-    model = onnx.load(input_model_path)
-
-    current_opset = None
-    for opset in model.opset_import:
-        if opset.domain == "" or opset.domain == "ai.onnx":  
-            current_opset = opset.version
-            break
+def fix_layernorm_output(input_model_path: str, output_model_path: str) -> bool:
+    """
+    Fix output types and shapes for all LayerNorm operators in an ONNX model.
     
-    print(f"Current Opset: {current_opset}, Target opset: {target_opset}")
-    
-    if current_opset is None or current_opset <= target_opset:
-        print("No need to change")
-        onnx.save(model, output_model_path)
-        return model
-    
-    for opset in model.opset_import:
-        if opset.domain == "" or opset.domain == "ai.onnx": 
-            opset.version = target_opset
-    
-    modified_nodes = []
-    modified_count = 0
-    
-    for node in model.graph.node:
-        if node.op_type == 'LayerNormalization':
-            modified_count += 1
-            
-            new_node = helper.make_node(
-                op_type='LayerNormalization',
-                inputs=list(node.input),
-                outputs=list(node.output[:1]), 
-                name=node.name
-            )
-            
-    
-            attrs_to_copy = {'epsilon', 'axis'}
-            for attr in node.attribute:
-                if attr.name in attrs_to_copy:
-                    new_node.attribute.append(attr)
-            
-     
-            has_epsilon = any(attr.name == 'epsilon' for attr in new_node.attribute)
-            has_axis = any(attr.name == 'axis' for attr in new_node.attribute)
-            
+    Args:
+        input_model_path (str): Path to the input model file
+        output_model_path (str): Path to save the output model file
         
-            if not has_epsilon:
-                epsilon_attr = helper.make_attribute('epsilon', 1e-5)
-                new_node.attribute.append(epsilon_attr)
-            
-        
-            if not has_axis:
-                axis_attr = helper.make_attribute('axis', -1)
-                new_node.attribute.append(axis_attr)
-            
-            modified_nodes.append(new_node)
-        else:
-            modified_nodes.append(node)
-    
-    print(f"Fixed {modified_count} LayerNormalization for {target_opset}")
-    
-    outputs_to_keep = set()
-    for node in modified_nodes:
-        for output in node.output:
-            outputs_to_keep.add(output)
-    
-    new_outputs = []
-    for output in model.graph.output:
-        if output.name in outputs_to_keep:
-            new_outputs.append(output)
-        else:
-            print(f"Removed: {output.name}")
-    
-    new_graph = helper.make_graph(
-        nodes=modified_nodes,
-        name=model.graph.name,
-        inputs=model.graph.input,
-        outputs=new_outputs if new_outputs else model.graph.output, 
-        initializer=model.graph.initializer
-    )
-    
-
-    for vi in model.graph.value_info:
-        new_graph.value_info.append(vi)
-    
-
-    new_model = helper.make_model(
-        new_graph,
-        producer_name=model.producer_name,
-        producer_version=model.producer_version,
-        domain=model.domain,
-        model_version=model.model_version,
-        doc_string=model.doc_string
-    )
-    
-
-    new_model.ir_version = model.ir_version
-    
-
+    Returns:
+        bool: True if the operation succeeded, False otherwise
+    """
     try:
-        onnx.checker.check_model(new_model)
-        print("Verified！")
+        # Load the model
+        model = onnx.load(input_model_path)
+        graph = model.graph
+        
+        # Find all LayerNorm nodes
+        layernorm_count = 0
+        updated_count = 0
+        tensor_info = {}
+        
+        # Collect tensor information
+        # Process input tensors
+        for input_tensor in graph.input:
+            name = input_tensor.name
+            shape = [dim.dim_value if dim.dim_value > 0 else None for dim in input_tensor.type.tensor_type.shape.dim]
+            elem_type = input_tensor.type.tensor_type.elem_type
+            tensor_info[name] = {"shape": shape, "elem_type": elem_type}
+        
+        # Process intermediate and output tensors
+        for value_info in list(graph.value_info) + list(graph.output):
+            name = value_info.name
+            shape = [dim.dim_value if dim.dim_value > 0 else None for dim in value_info.type.tensor_type.shape.dim]
+            elem_type = value_info.type.tensor_type.elem_type
+            tensor_info[name] = {"shape": shape, "elem_type": elem_type}
+        
+        # Fix each LayerNorm node
+        for node in graph.node:
+            if node.op_type == 'LayerNormalization':
+                layernorm_count += 1
+                
+                if not node.input:
+                    continue
+                
+                # Get input information
+                input_name = node.input[0]
+                if input_name not in tensor_info:
+                    continue
+                
+                input_info = tensor_info[input_name]
+                input_shape = input_info["shape"]
+                input_elem_type = input_info["elem_type"]
+                
+                # Get axis attribute
+                axis = -1
+                for attr in node.attribute:
+                    if attr.name == "axis":
+                        axis = attr.i
+                        break
+                
+                # Process all outputs
+                for i, output_name in enumerate(node.output):
+                    # Determine correct output shape and type
+                    output_shape = None
+                    output_elem_type = input_elem_type
+                    
+                    if i == 0:  # Main output - same shape as input
+                        output_shape = input_shape
+                    else:  # mean and std outputs - shape depends on normalization axis
+                        # Handle negative axis index
+                        if axis < 0 and input_shape and None not in input_shape:
+                            axis = len(input_shape) + axis
+                        
+                        # Create shape for mean and std (remove normalization axis)
+                        if input_shape and None not in input_shape and 0 <= axis < len(input_shape):
+                            output_shape = list(input_shape)
+                            output_shape.pop(axis)  # Remove normalization axis
+                    
+                    # Find and remove existing value info
+                    for value_info in list(graph.value_info):
+                        if value_info.name == output_name:
+                            graph.value_info.remove(value_info)
+                            break
+                    
+                    # Create new value info
+                    if output_shape and None not in output_shape:
+                        new_value_info = onnx.helper.make_tensor_value_info(
+                            output_name, 
+                            output_elem_type, 
+                            output_shape
+                        )
+                        graph.value_info.append(new_value_info)
+                    
+                    # Update graph output if needed
+                    for j, output in enumerate(list(graph.output)):
+                        if output.name == output_name:
+                            if output_shape and None not in output_shape:
+                                new_output = onnx.helper.make_tensor_value_info(
+                                    output_name,
+                                    output_elem_type,
+                                    output_shape
+                                )
+                                graph.output.remove(output)
+                                graph.output.insert(j, new_output)
+                            break
+                    
+                    # Update tensor info dictionary
+                    tensor_info[output_name] = {
+                        "shape": output_shape,
+                        "elem_type": output_elem_type
+                    }
+                    
+                    print(f"  Output {i}: {output_name}, shape={output_shape}")  # Debug info
+                
+                updated_count += 1
+        
+        # Save the model
+        onnx.save(model, output_model_path)
+        print(f"Updated {updated_count}/{layernorm_count} LayerNorm nodes, model saved to {output_model_path}")
+        return True
+        
     except Exception as e:
-        print(f"Warning:Not Verified {e}")
-    
-    onnx.save(new_model, output_model_path)
-    print(f"Saved {output_model_path}")
-    
+        print(f"Error fixing LayerNorm outputs: {str(e)}")
+        return False
 
 
 def modify_conflict_outputs(input_model_path, output_model_path):
@@ -333,17 +350,19 @@ def modify_conflict_outputs(input_model_path, output_model_path):
     
     select_nodes = []
     for node in graph.node:
-        if node.op_type == 'LayerNormalization' or node.op_type == 'MaxPool':
+        # if node.op_type == 'LayerNormalization' or node.op_type == 'MaxPool':
+        if node.op_type == 'MaxPool':
             select_nodes.append(node)
     
-    print(f"Find {len(select_nodes)} Layernorm or Maxpool")
+    print(f"Find {len(select_nodes)} Maxpool")
     
     outputs_to_remove = []
     
     new_nodes = []
     
     for node in graph.node:
-        if (node.op_type == 'LayerNormalization' or node.op_type == 'MaxPool') and len(node.output) > 1:
+        # if (node.op_type == 'LayerNormalization' or node.op_type == 'MaxPool') and len(node.output) > 1:
+        if (node.op_type == 'MaxPool') and len(node.output) > 1:
             outputs_to_remove.extend(node.output[1:])
             
             new_node = onnx.NodeProto()
@@ -739,87 +758,177 @@ def optimize_reshape_fusion(input_model_path: str, output_model_path: str) -> No
 
 
 def remove_identity_reducesum(input_model_path, output_model_path):
-   
-    model = onnx.load(input_model_path)
+    """
+    Remove Identity and removable ReduceSum nodes from the model,
+    ensuring correct output naming
     
-   
+    Args:
+        input_model_path (str): Input ONNX model path
+        output_model_path (str): Output ONNX model path
+    
+    Returns:
+        onnx.ModelProto: Processed model
+    """
+    import onnx
+    import numpy as np
+    from onnx import shape_inference, helper, TensorProto
+    
+    # Load the model and infer shapes
+    model = onnx.load(input_model_path)
+    try:
+        model = shape_inference.infer_shapes(model)
+    except Exception as e:
+        print(f"Warning: Shape inference failed: {e}. Continuing without shape information.")
+    
     graph = model.graph
     
-
-    node_map = {}
-    for node in graph.node:
-        node_map[node.name] = node
+    # Build node mapping
+    node_map = {node.name: node for node in graph.node}
     
-
-    input_map = {}
-    for node in graph.node:
-        for output in node.output:
-            if output:
-                input_map[output] = node
+    # Store tensor shapes from value_info, inputs, and outputs
+    shape_info = {}
+    for info in list(graph.value_info) + list(graph.input) + list(graph.output):
+        if hasattr(info.type.tensor_type.shape, 'dim'):
+            dims = []
+            for dim in info.type.tensor_type.shape.dim:
+                if dim.dim_value:
+                    dims.append(dim.dim_value)
+                else:
+                    dims.append(-1)
+            shape_info[info.name] = dims
     
-
+    # Get initializer shapes
+    for initializer in graph.initializer:
+        shape_info[initializer.name] = list(initializer.dims)
+    
+    # Store nodes to remove and replacement mapping
     nodes_to_remove = []
-    
- 
     replacement_map = {}
+    reshape_nodes_to_add = []
     
-    
+    # Process Identity nodes
     for node in graph.node:
         if node.op_type == "Identity":
-           
             input_name = node.input[0]
             output_name = node.output[0]
             
-            
             replacement_map[output_name] = input_name
-            
-          
             nodes_to_remove.append(node)
- 
+    
+    # Process ReduceSum nodes
     for node in graph.node:
         if node.op_type == "ReduceSum":
-           
-            is_removable = False
+            input_name = node.input[0]
+            output_name = node.output[0]
             
-     
+            # Check for dimension 1 reduction with keepdims=0
+            keepdims = 1  # Default value
             for attr in node.attribute:
-                if attr.name == "keepdims" and attr.i == 1:
-                    is_removable = True
+                if attr.name == "keepdims":
+                    keepdims = attr.i
                     break
             
-            if is_removable:
-                input_name = node.input[0]
-                output_name = node.output[0]
+            # Get reduction axes
+            axes = []
+            for attr in node.attribute:
+                if attr.name == "axes":
+                    axes = list(attr.ints)
+                    break
+            
+            # If opset >= 13, axes might be an input
+            if len(node.input) > 1 and not axes:
+                axes_name = node.input[1]
+                for initializer in graph.initializer:
+                    if initializer.name == axes_name:
+                        axes = onnx.numpy_helper.to_array(initializer).tolist()
+                        if not isinstance(axes, list):
+                            axes = [axes]
+                        break
+            
+            # Get input shape
+            if input_name in shape_info:
+                input_shape = shape_info[input_name]
                 
-               
-                replacement_map[output_name] = input_name
+                # Check if all reduction axes have dimension 1
+                all_dim_one = True
+                for axis in axes:
+                    # Handle negative axis
+                    if axis < 0:
+                        axis = len(input_shape) + axis
+                    
+                    if 0 <= axis < len(input_shape) and input_shape[axis] == 1:
+                        continue
+                    else:
+                        all_dim_one = False
+                        break
                 
-              
-                nodes_to_remove.append(node)
+                if all_dim_one and axes:
+                    if keepdims == 1:
+                        # Simple replacement case
+                        replacement_map[output_name] = input_name
+                        nodes_to_remove.append(node)
+                    elif keepdims == 0:
+                        # Need to add a Reshape node
+                        # Calculate output shape by removing dimensions with size 1
+                        output_shape = []
+                        for i, dim in enumerate(input_shape):
+                            if i not in axes and (i + len(input_shape) not in axes):
+                                output_shape.append(dim)
+                        
+                        # Create shape tensor for Reshape
+                        shape_tensor_name = f"{node.name}_shape"
+                        shape_tensor = helper.make_tensor(
+                            name=shape_tensor_name,
+                            data_type=TensorProto.INT64,
+                            dims=[len(output_shape)],
+                            vals=output_shape
+                        )
+                        
+                        # Create Reshape node
+                        reshape_node = helper.make_node(
+                            "Reshape",
+                            inputs=[input_name, shape_tensor_name],
+                            outputs=[output_name],
+                            name=f"{node.name}_reshape"
+                        )
+                        
+                        # Store for later addition
+                        reshape_nodes_to_add.append((reshape_node, shape_tensor))
+                        nodes_to_remove.append(node)
     
-    
+    # Update inputs of other nodes
     for node in graph.node:
         if node not in nodes_to_remove:
             for i, input_name in enumerate(node.input):
-         
                 if input_name in replacement_map:
-                 
                     node.input[i] = replacement_map[input_name]
     
-  
+    # Update graph outputs
     for output in graph.output:
         if output.name in replacement_map:
             output.name = replacement_map[output.name]
     
-  
+    # Remove nodes and add new reshape nodes
     new_nodes = [node for node in graph.node if node not in nodes_to_remove]
+    
+    # Add shape tensors to initializers
+    for _, shape_tensor in reshape_nodes_to_add:
+        graph.initializer.append(shape_tensor)
+    
+    # Add reshape nodes
+    for reshape_node, _ in reshape_nodes_to_add:
+        new_nodes.append(reshape_node)
+    
+    # Clear and re-add nodes
     graph.ClearField("node")
     graph.node.extend(new_nodes)
- 
+    
+    # Save model
     onnx.save(model, output_model_path)
     
     print(f"Saved to {output_model_path}")
-    print(f"Removed {len(nodes_to_remove)}  Identity or ReduceSum")
+    print(f"Removed {len(nodes_to_remove)} nodes")
+    print(f"Added {len(reshape_nodes_to_add)} Reshape nodes")
     
     return model
 

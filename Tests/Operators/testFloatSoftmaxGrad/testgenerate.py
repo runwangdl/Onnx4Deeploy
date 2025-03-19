@@ -39,7 +39,7 @@ def generate_softmax_grad_onnx_and_data(save_path=None):
     # dy is the upstream gradient
     dy = np.random.randn(*input_shape).astype(np.float32)
     
-    np.savez(input_file, y=y, dy=dy)
+    np.savez(input_file, dy=dy, y=y)
     
     # Define ONNX tensors
     y_tensor = helper.make_tensor_value_info("y", TensorProto.FLOAT, input_shape)

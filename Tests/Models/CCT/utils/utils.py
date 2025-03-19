@@ -115,14 +115,14 @@ def run_train_onnx_optimization(onnx_train_file, onnx_output_file):
     run_optmization_remove_biasgelu(onnx_train_file, onnx_train_file)
     print(f"✅ Successfully removed BiasGeluFusion. Saved as {onnx_train_file}")
 
-    fix_layernorm_version(onnx_train_file, onnx_train_file)
+    fix_layernorm_output(onnx_train_file, onnx_train_file)
     print(f"✅ Successfully fixed LayerNormalization opset version. Saved as {onnx_train_file}")
 
     optimize_reshape_fusion(onnx_train_file, onnx_train_file)
     print(f"✅ Successfully optimized Reshape nodes. Saved as {onnx_output_file}")
 
     modify_conflict_outputs(onnx_train_file, onnx_train_file)
-    print(f"✅ Successfully removed all second outputs from Layernorm and Maxpool nodes. Saved as {onnx_output_file}")
+    print(f"✅ Successfully removed all second outputs from Maxpool nodes. Saved as {onnx_output_file}")
 
     convert_squeeze_unsqueeze_input_to_attr(onnx_train_file, onnx_train_file)
     print(f"✅ Successfully converted Squeeze inputs to attributes. Saved as {onnx_output_file}")

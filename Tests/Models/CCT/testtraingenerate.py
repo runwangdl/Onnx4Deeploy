@@ -8,7 +8,7 @@ from CCT.cct import cct_test
 from onnxruntime.training import artifacts
 from utils.utils import *
 from utils.fixshape import infer_shapes_with_custom_ops, print_onnx_shapes
-from mnistCheckpoint import create_test_intput_output
+from mnistCheckpoint import create_test_input_output
 
 def generate_cct_training_onnx(save_path=None):
     """ Generate ONNX training model for CCT based on config, with optional save path """
@@ -60,7 +60,7 @@ def generate_cct_training_onnx(save_path=None):
 
     # Load ONNX model from buffer and save it as network_infer.onnx
     onnx_model = onnx.load_model_from_string(f.getvalue())
-    print("Randomizing initializers in inference model...")
+    # print("Randomizing initializers in inference model...")
     onnx_model = randomize_onnx_initializers(onnx_model)
 
     onnx.save(onnx_model, onnx_infer_file)
@@ -80,8 +80,12 @@ def generate_cct_training_onnx(save_path=None):
     # ]]  
     # requires_grad = [ name for name in all_param_names if "const" not in name]
     
+    # requires_grad = [name for name in all_param_names if name in [
+    # 'classifier_fc_weight', 'classifier_fc_bias',  'node_0_classifier_attention_pool_Transpose__0', 'classifier_norm_weight', 'classifier_norm_bias', 'classifier_attention_pool_bias' ]]
     requires_grad = [name for name in all_param_names if name in [
-    'classifier_fc_weight', 'classifier_fc_bias',  'node_0_classifier_attention_pool_Transpose__0', 'classifier_norm_weight', 'classifier_norm_bias' ]]
+    'classifier_fc_weight', 'classifier_fc_bias' ]]
+    # requires_grad = [name for name in all_param_names if name in [
+    # 'classifier_fc_weight', 'classifier_fc_bias']]
 
     # requires_grad = [name for name in all_param_names if name in [
     # 'node_0_classifier_blocks_0_linear1_Transpose__0', 'classifier_blocks_0_linear1_bias', 'node_0_classifier_blocks_0_linear2_Transpose__0'
@@ -136,7 +140,7 @@ def generate_cct_training_onnx(save_path=None):
    
     print(f"✅ Training ONNX model saved to {onnx_output_file}")
 
-    create_test_intput_output()
+    create_test_input_output()
     print(f"✅ Created test input and output data")
 
 
