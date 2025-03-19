@@ -58,6 +58,42 @@ def run_onnx_model(input_data, labels, model_path):
     
     return output_dict
 
+def remove_loss_from_outputs(output_path):
+    """
+    Remove the loss output from the outputs.npz file.
+    
+    Args:
+        output_path: Path to the outputs.npz file
+    
+    Returns:
+        None
+    """
+    try:
+        # Load the outputs
+        outputs = np.load(output_path)
+        outputs_dict = {key: outputs[key] for key in outputs.files}
+        
+        # Print original outputs
+        print(f"Original outputs: {list(outputs_dict.keys())}")
+        
+        # Assuming the first key is the loss
+        loss_key = list(outputs_dict.keys())[0]
+        print(f"Removing output: {loss_key}")
+        
+        # Remove the loss output
+        outputs_dict.pop(loss_key)
+        
+        # Save the modified outputs
+        np.savez(output_path, **outputs_dict)
+        
+        print(f"✅ Loss output removed from {output_path}")
+        print(f"Remaining outputs: {list(outputs_dict.keys())}")
+        
+    except Exception as e:
+        print(f"❌ Error removing loss output: {e}")
+        import traceback
+        traceback.print_exc()
+
 def create_test_input_output():
     """
     Create test input and output files by running inference on the model.
@@ -106,10 +142,14 @@ def create_test_input_output():
     np.savez(output_path, **outputs_dict)
     print(f"✅ Output saved to outputs.npz with {len(outputs_dict)} values")
     
-    # Print output shapes
-    print("Output shapes:")
-    for name, arr in outputs_dict.items():
-        print(f"  {name}: {arr.shape}")
+    # Remove loss output
+    remove_loss_from_outputs(output_path)
+    
+    # Print output shapes from the modified file
+    modified_outputs = np.load(output_path)
+    print("Final output shapes:")
+    for name in modified_outputs.files:
+        print(f"  {name}: {modified_outputs[name].shape}")
 
 def main():
     """
