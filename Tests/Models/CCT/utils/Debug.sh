@@ -1,2 +1,0 @@
-cd ..
-python testtraingenerate.py
