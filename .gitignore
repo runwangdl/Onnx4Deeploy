@@ -2,3 +2,14 @@ Tests/Models/CCT/onnx/
 Tests/Models/CCT/__pycache__/
 /app/Onnx4Deeploy/Tests/Operators/*/onnx/
 /app/Onnx4Deeploy/utils/node_outputs/
+Tests/Models/CCT/__pycache__/mnistCheckpoint.cpython-310.pyc
+Tests/Models/CCT/utils/__pycache__/__init__.cpython-310.pyc
+Tests/Models/CCT/utils/__pycache__/appendoptimizer.cpython-310.pyc
+Tests/Models/CCT/utils/__pycache__/fixshape.cpython-310.pyc
+Tests/Models/CCT/utils/__pycache__/trainoptimization.cpython-310.pyc
+Tests/Models/CCT/utils/__pycache__/utils.cpython-310.pyc
+Tests/Models/CCT/__pycache__/mnistCheckpoint.cpython-310.pyc
+Tests/Operators/testFloatSGD/onnx/sgd_test/inputs.npz
+Tests/Operators/testFloatSGD/onnx/sgd_test/network.onnx
+Tests/Operators/testFloatSGD/onnx/sgd_test/outputs.npz
+Tests/Operators/testFloatSGD/onnx/sgd_test/sgd_reference.py

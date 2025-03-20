@@ -9,6 +9,7 @@ from onnxruntime.training import artifacts
 from utils.utils import *
 from utils.fixshape import infer_shapes_with_custom_ops, print_onnx_shapes
 from mnistCheckpoint import create_test_input_output
+from utils.appendoptimizer import *
 
 def generate_cct_training_onnx(save_path=None):
     """ Generate ONNX training model for CCT based on config, with optional save path """
@@ -144,9 +145,13 @@ def generate_cct_training_onnx(save_path=None):
     print_onnx_shapes(onnx_output_file)
    
     print(f"✅ Training ONNX model saved to {onnx_output_file}")
-
     create_test_input_output()
     print(f"✅ Created test input and output data")
+
+    learning_rate = load_train_config()
+    add_sgd_nodes(onnx_output_file, onnx_output_file, learning_rate=learning_rate)
+    infer_shapes_with_custom_ops(onnx_output_file, onnx_output_file)
+    print(f"✅ Added SGD nodes to {onnx_output_file}")
 
 
 if __name__ == "__main__":

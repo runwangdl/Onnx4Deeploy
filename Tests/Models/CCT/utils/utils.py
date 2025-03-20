@@ -108,6 +108,17 @@ def load_config(config_filename="../config.yaml"):
         config.get("opset_version", 12)  # Default value for opset_version
     )
 
+def load_train_config(config_filename="../config.yaml"):
+    """Load and parse config.yaml, returning CCT-specific parameters in a single return statement."""
+    # Resolve config.yaml relative to the script's location
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    config_file = os.path.join(script_dir, config_filename)
+
+    with open(config_file, "r") as f:
+        config = yaml.safe_load(f).get("training", {})
+    
+    return config.get("learning_rate", 0.01)
+    
 
 def run_train_onnx_optimization(onnx_train_file, onnx_output_file):
     # remove the second output of maxpool

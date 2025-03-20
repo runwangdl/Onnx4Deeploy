@@ -67,17 +67,16 @@ def infer_shapes_with_custom_ops(model_path: str, output_model_path: Optional[st
             except Exception as node_err:
                 print(f"Node {i}: {node.op_type} Shape inference fail: {str(node_err)}")
                 if node.op_type.startswith("com.microsoft"):
-                    print(f"尝试使用自定义方法推断Microsoft算子: {node.op_type}")
+                    print(f"Try to use microsoft : {node.op_type}")
                     try:
                         apply_custom_inference(inferred_model.graph, node)
-                        print(f"节点 {i}: {node.op_type} 使用自定义方法推断成功")
+                        print(f"Node {i}: {node.op_type} infered by custom inference")
                     except Exception as custom_err:
-                        print(f"自定义推断失败: {str(custom_err)}")
+                        print(f"Infered failed: {str(custom_err)}")
     
-    # 保存带有形状信息的模型
     if output_model_path:
         onnx.save(inferred_model, output_model_path)
-        print(f"带有形状信息的模型已保存到: {output_model_path}")
+        print(f"Onnx with shape saved: {output_model_path}")
     
     return inferred_model
 
@@ -91,7 +90,7 @@ def apply_custom_inference(graph: onnx.GraphProto, node: onnx.NodeProto) -> None
             log_prob_shape = get_tensor_shape(graph, node.input[2])
             if log_prob_shape:
                 set_tensor_shape(graph, node.output[0], log_prob_shape)
-                print(f"SoftmaxCrossEntropyGrad: 设置输出形状与log_prob输入相同: {log_prob_shape}")
+                print(f"SoftmaxCrossEntropyGrad: {log_prob_shape}")
   
     elif node.op_type.startswith("com.microsoft"):
     

@@ -1,13 +1,11 @@
 import numpy as np
 import onnxruntime as ort
-import yaml
+import onnx
 import os
 import torch
 import torchvision
 from torchvision import transforms
-from utils.utils import load_config
-from utils.utils import run_onnx_optimization, load_config, rename_and_save_onnx, run_train_onnx_optimization, rename_nodes, randomize_layernorm_params
-from utils.fixshape import infer_shapes_with_custom_ops, print_onnx_shapes
+from utils.utils import *
 
 def preprocess_mnist(batch_size, image_size):
     """
@@ -33,17 +31,17 @@ def preprocess_mnist(batch_size, image_size):
     
     return images.numpy(), labels
 
-def run_onnx_model(input_data, labels, model_path):
+def run_original_onnx_model(input_data, labels, model_path):
     """
-    Run inference on ONNX model.
+    Run inference on original ONNX model to get gradients.
     
     Args:
         input_data: Input data for the model
         labels: Labels for the model
-        model_path: Path to the ONNX model
+        model_path: Path to the original ONNX model (without SGD)
         
     Returns:
-        Dictionary of model outputs
+        Dictionary of model outputs (gradients)
     """
     ort_session = ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
     
@@ -58,45 +56,43 @@ def run_onnx_model(input_data, labels, model_path):
     
     return output_dict
 
-def remove_loss_from_outputs(output_path):
+def get_initializer_from_onnx(model_path, initializer_name):
     """
-    Remove the loss output from the outputs.npz file.
+    Extract initializer tensor from ONNX model.
     
     Args:
-        output_path: Path to the outputs.npz file
-    
+        model_path: Path to the ONNX model
+        initializer_name: Name of the initializer to extract
+        
     Returns:
-        None
+        Numpy array of the initializer tensor
     """
-    try:
-        # Load the outputs
-        outputs = np.load(output_path)
-        outputs_dict = {key: outputs[key] for key in outputs.files}
+    model = onnx.load(model_path)
+    for initializer in model.graph.initializer:
+        if initializer.name == initializer_name:
+            # Convert ONNX tensor to numpy array
+            from onnx import numpy_helper
+            return numpy_helper.to_array(initializer)
+    
+    raise ValueError(f"Initializer {initializer_name} not found in model")
+
+def apply_sgd_update(weight, gradient, learning_rate=0.01):
+    """
+    Manually apply SGD update to weights.
+    
+    Args:
+        weight: Current weight tensor
+        gradient: Gradient tensor
+        learning_rate: Learning rate for SGD
         
-        # Print original outputs
-        print(f"Original outputs: {list(outputs_dict.keys())}")
-        
-        # Assuming the first key is the loss
-        loss_key = list(outputs_dict.keys())[0]
-        print(f"Removing output: {loss_key}")
-        
-        # Remove the loss output
-        outputs_dict.pop(loss_key)
-        
-        # Save the modified outputs
-        np.savez(output_path, **outputs_dict)
-        
-        print(f"✅ Loss output removed from {output_path}")
-        print(f"Remaining outputs: {list(outputs_dict.keys())}")
-        
-    except Exception as e:
-        print(f"❌ Error removing loss output: {e}")
-        import traceback
-        traceback.print_exc()
+    Returns:
+        Updated weight tensor
+    """
+    return weight - learning_rate * gradient
 
 def create_test_input_output():
     """
-    Create test input and output files by running inference on the model.
+    Create test input and output files with manual SGD implementation.
     """
     # Load config
     config = load_config()
@@ -119,11 +115,12 @@ def create_test_input_output():
     folder_path = os.path.join(base_dir, "onnx", folder_name)
     os.makedirs(folder_path, exist_ok=True)
     
+    # Path to original training network
     network_path = os.path.join(base_dir, "onnx", folder_name, "network_train.onnx")
     input_path = os.path.join(base_dir, "onnx", folder_name, "inputs.npz")
     output_path = os.path.join(base_dir, "onnx", folder_name, "outputs.npz")
     
-    print(f"Network path: {network_path}")
+    print(f"Original network path: {network_path}")
     print(f"Input path: {input_path}")
     print(f"Output path: {output_path}")
     
@@ -135,21 +132,72 @@ def create_test_input_output():
     np.savez(input_path, input=input_data, labels=labels)
     print(f"✅ Input saved to inputs.npz (image size: {img_size}x{img_size}, batch size: {batch_size})")
     
-    # Run the model
-    outputs_dict = run_onnx_model(input_data, labels, model_path=network_path)
+    # Run the original model to get gradients
+    outputs_dict = run_original_onnx_model(input_data, labels, model_path=network_path)
     
-    # Save outputs
-    np.savez(output_path, **outputs_dict)
-    print(f"✅ Output saved to outputs.npz with {len(outputs_dict)} values")
+    # Extract parameter gradients from outputs
+    weight_grad_name = None
+    bias_grad_name = None
     
-    # Remove loss output
-    remove_loss_from_outputs(output_path)
+    # Try to find the gradient outputs by name patterns
+    for name in outputs_dict.keys():
+        if "classifier_fc_weight_grad" in name:
+            weight_grad_name = name
+        elif "classifier_fc_Gemm_Grad_dC_reduced" in name or "classifier_fc_bias_grad" in name:
+            bias_grad_name = name
     
-    # Print output shapes from the modified file
-    modified_outputs = np.load(output_path)
+    if not weight_grad_name:
+        print("❌ Could not find weight gradient in outputs")
+        print(f"Available outputs: {list(outputs_dict.keys())}")
+        return
+    
+    if not bias_grad_name:
+        print("❌ Could not find bias gradient in outputs")
+        print(f"Available outputs: {list(outputs_dict.keys())}")
+        return
+    
+    print(f"Found weight gradient: {weight_grad_name}")
+    print(f"Found bias gradient: {bias_grad_name}")
+    
+    # Extract original weights from model
+    try:
+        classifier_fc_weight = get_initializer_from_onnx(network_path, "classifier_fc_weight")
+        classifier_fc_bias = get_initializer_from_onnx(network_path, "classifier_fc_bias")
+        print(f"✅ Successfully extracted original parameters from model")
+        print(f"  Weight shape: {classifier_fc_weight.shape}")
+        print(f"  Bias shape: {classifier_fc_bias.shape}")
+    except Exception as e:
+        print(f"❌ Error extracting parameters: {e}")
+        import traceback
+        traceback.print_exc()
+        return
+    
+    # Apply SGD manually
+    learning_rate = load_train_config()
+    
+    weight_grad = outputs_dict[weight_grad_name]
+    bias_grad = outputs_dict[bias_grad_name]
+    
+    # Apply SGD update
+    weight_updated = apply_sgd_update(classifier_fc_weight, weight_grad, learning_rate)
+    bias_updated = apply_sgd_update(classifier_fc_bias, bias_grad, learning_rate)
+    
+    print(f"✅ Successfully applied SGD updates to parameters")
+    
+    # Create output dict with updated parameters
+    sgd_outputs = {
+        "classifier_fc_weight_updated": weight_updated,
+        "classifier_fc_bias_updated": bias_updated
+    }
+    
+    # Save updated parameters to output file
+    np.savez(output_path, **sgd_outputs)
+    print(f"✅ Updated parameters saved to {output_path}")
+    
+    # Print output shapes
     print("Final output shapes:")
-    for name in modified_outputs.files:
-        print(f"  {name}: {modified_outputs[name].shape}")
+    for name, arr in sgd_outputs.items():
+        print(f"  {name}: {arr.shape}")
 
 def main():
     """

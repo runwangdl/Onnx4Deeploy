@@ -7,3 +7,6 @@ cct:
   num_layers: 1
   batch_size: 1        
   opset_version: 15
+
+training:
+  learning_rate: 0.01
