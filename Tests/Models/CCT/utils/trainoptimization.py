@@ -1434,3 +1434,158 @@ def remove_softmax_grad_loss_inputs(input_model_path, output_model_path):
     # Save the modified model
     onnx.save(model, output_model_path)
     print(f"Saved model with SoftmaxCrossEntropyLossGrad first input removed to: {output_model_path}")
+
+def optimize_softmax_axis(input_model_path, output_model_path):
+   
+    model = onnx.load(input_model_path)
+    
+    # Track if we made any changes
+    optimized = False
+    
+    # Create a map of value_info by name for easy access
+    value_info_map = {vi.name: vi for vi in model.graph.value_info}
+    value_info_map.update({vi.name: vi for vi in model.graph.input})
+    value_info_map.update({vi.name: vi for vi in model.graph.output})
+    
+    # Function to get shape from value_info
+    def get_shape(tensor_name):
+        if tensor_name in value_info_map:
+            shape = []
+            for dim in value_info_map[tensor_name].type.tensor_type.shape.dim:
+                if dim.dim_param:
+                    # Handle symbolic dimensions (set to -1 for dynamic dimension)
+                    shape.append(-1)
+                else:
+                    shape.append(dim.dim_value)
+            return shape
+        return None
+    
+    # Track the names of nodes to be removed
+    nodes_to_remove = []
+    
+    # Track new nodes and value_infos to be added
+    new_nodes = []
+    new_value_infos = []
+    
+    # For each node in the graph
+    for i, node in enumerate(model.graph.node):
+        if node.op_type == "Softmax":
+            # Get the input and output names
+            input_name = node.input[0]
+            output_name = node.output[0]
+            
+            # Get the axis attribute
+            axis = None
+            for attr in node.attribute:
+                if attr.name == "axis":
+                    axis = attr.i
+                    break
+            
+            # If axis is not set, it defaults to 1 in ONNX
+            if axis is None:
+                axis = 1
+            
+            # Get the input shape
+            input_shape = get_shape(input_name)
+            if input_shape is None:
+                print(f"Warning: Could not determine shape for {input_name}, skipping optimization")
+                continue
+            
+            # Check if all dimensions after axis are 1
+            all_ones_after_axis = all(dim == 1 for dim in input_shape[axis+1:]) if axis+1 < len(input_shape) else True
+            
+            # Only optimize if the axis is not the last dimension and all subsequent dimensions are 1
+            if axis != len(input_shape) - 1 and all_ones_after_axis and axis >= 0:
+                print(f"Optimizing Softmax node with input shape {input_shape} and axis={axis}")
+                
+                # Create unique names for intermediate tensors
+                reshape_before_output = f"{input_name}_reshaped_before_softmax"
+                softmax_output = f"{output_name}_after_softmax"
+                
+                # Calculate new shapes
+                # Move the axis dimension to the end and flatten all the 1s
+                new_shape_before = []
+                for i in range(len(input_shape)):
+                    if i < axis:
+                        new_shape_before.append(input_shape[i])
+                    elif i == axis:
+                        continue
+                    elif i > axis:
+                        continue
+                new_shape_before.append(input_shape[axis])
+                
+                # Create reshape node before softmax
+                reshape_before_node = helper.make_node(
+                    "Reshape",
+                    inputs=[input_name, f"{input_name}_shape_before"],
+                    outputs=[reshape_before_output],
+                    name=f"Reshape_before_softmax_{output_name}"
+                )
+                
+                # Create initializer for the shape tensor
+                shape_tensor_before = numpy_helper.from_array(
+                    np.array(new_shape_before, dtype=np.int64),
+                    name=f"{input_name}_shape_before"
+                )
+                
+                # Create new softmax node with axis set to -1 (last dimension)
+                new_softmax_node = helper.make_node(
+                    "Softmax",
+                    inputs=[reshape_before_output],
+                    outputs=[softmax_output],
+                    name=f"Softmax_optimized_{output_name}",
+                    axis=-1  # Use -1 to always target the last dimension
+                )
+                
+                # Create reshape node after softmax to restore original shape
+                reshape_after_node = helper.make_node(
+                    "Reshape",
+                    inputs=[softmax_output, f"{output_name}_shape_after"],
+                    outputs=[output_name],
+                    name=f"Reshape_after_softmax_{output_name}"
+                )
+                
+                # Create initializer for the shape tensor
+                shape_tensor_after = numpy_helper.from_array(
+                    np.array(input_shape, dtype=np.int64),
+                    name=f"{output_name}_shape_after"
+                )
+                
+                # Create value info for reshape_before_output
+                reshape_before_vi = helper.make_tensor_value_info(
+                    reshape_before_output,
+                    value_info_map[input_name].type.tensor_type.elem_type,
+                    new_shape_before
+                )
+                
+                # Create value info for softmax_output
+                softmax_output_vi = helper.make_tensor_value_info(
+                    softmax_output,
+                    value_info_map[output_name].type.tensor_type.elem_type,
+                    new_shape_before  # Shape doesn't change after softmax
+                )
+                
+                # Add all new nodes and value infos
+                new_nodes.extend([reshape_before_node, new_softmax_node, reshape_after_node])
+                new_value_infos.extend([reshape_before_vi, softmax_output_vi])
+                model.graph.initializer.extend([shape_tensor_before, shape_tensor_after])
+                
+                # Mark the original node for removal
+                nodes_to_remove.append(node)
+                optimized = True
+    
+    # Remove the original nodes that were optimized
+    for node in nodes_to_remove:
+        model.graph.node.remove(node)
+    
+    # Add the new nodes and value infos
+    model.graph.node.extend(new_nodes)
+    model.graph.value_info.extend(new_value_infos)
+    
+    # Save the optimized model
+    print(f"Saving optimized model to {output_model_path}")
+    onnx.save(model, output_model_path)
+    
+    print(f"Optimization complete. Modified {len(nodes_to_remove)} Softmax nodes.")
+    return optimized
+

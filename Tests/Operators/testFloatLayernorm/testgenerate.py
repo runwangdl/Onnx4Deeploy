@@ -7,7 +7,7 @@ import os
 from onnx import TensorProto, helper
 
 def generate_layernorm_onnx_and_data(save_path=None):
-    """ Generate ONNX model for LayerNorm operator based on config, with optional save path """
+    """ Generate ONNX model for LayerNorm operator without mean and invstddev outputs """
     
     # Resolve config.yaml relative to the script's location
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -51,14 +51,8 @@ def generate_layernorm_onnx_and_data(save_path=None):
     # Save input data
     np.savez(input_file, input=input_data, scale=scale_data, bias=bias_data)
     
-    # Calculate expected output shapes
-    # For normalized output, it's the same as input
+    # Calculate expected output shape (same as input)
     output_shape = input_shape
-    
-    # For mean and invstddev, reduce along the normalization axis
-    mean_invstddev_shape = list(input_shape)
-    mean_invstddev_shape[norm_axis] = 1
-    mean_invstddev_shape = tuple(mean_invstddev_shape)
     
     # Define ONNX tensors
     input_tensor = helper.make_tensor_value_info("input", TensorProto.FLOAT, input_shape)
@@ -66,47 +60,41 @@ def generate_layernorm_onnx_and_data(save_path=None):
     bias_tensor = helper.make_tensor_value_info("bias", TensorProto.FLOAT, params_shape)
     
     output_tensor = helper.make_tensor_value_info("output", TensorProto.FLOAT, output_shape)
-    mean_tensor = helper.make_tensor_value_info("mean", TensorProto.FLOAT, mean_invstddev_shape)
-    invstddev_tensor = helper.make_tensor_value_info("invstddev", TensorProto.FLOAT, mean_invstddev_shape)
     
-    # Create a single combined LayerNorm node
+    # Create a LayerNorm node with only the primary output
     layernorm_node = helper.make_node(
-        "LayerNormalization",  # Using the ONNX standard name for this op
+        "LayerNormalization",
         inputs=["input", "scale", "bias"],
-        outputs=["output", "mean", "invstddev"],
+        outputs=["output"],  # Only output the normalized result
         axis=axis,
         epsilon=epsilon,
         name="layernorm_node"
     )
     
-    # Collect all nodes
-    nodes = [layernorm_node]
-    
     # Create the graph
     graph_def = helper.make_graph(
-        nodes, 
+        [layernorm_node], 
         "layernorm_graph", 
         [input_tensor, scale_tensor, bias_tensor], 
-        [output_tensor, mean_tensor, invstddev_tensor]
+        [output_tensor]  # Only output the normalized result
     )
     
     model_def = helper.make_model(
         graph_def, 
         producer_name="layernorm_model", 
-        opset_imports=[helper.make_opsetid("", 17)]  # Using ONNX opset 17 which supports LayerNormalization
+        opset_imports=[helper.make_opsetid("", 17)]
     )
     
     # Save ONNX model
     onnx.save(model_def, onnx_file)
     print(f"✅ ONNX model saved to {onnx_file}")
     
-    # Use ONNX Runtime to directly generate the reference outputs
-    # This ensures the outputs match the ONNX standard exactly
+    # Use ONNX Runtime to generate the reference output
     session = ort.InferenceSession(onnx_file, providers=["CPUExecutionProvider"])
     
     # Run inference with ONNX Runtime
     outputs = session.run(
-        ["output", "mean", "invstddev"],
+        ["output"],
         {
             "input": input_data,
             "scale": scale_data,
@@ -114,11 +102,11 @@ def generate_layernorm_onnx_and_data(save_path=None):
         }
     )
     
-    # Get the results
-    output_data, mean_data, invstddev_data = outputs
+    # Get the result
+    output_data = outputs[0]
     
     # Save output data
-    np.savez(output_file, output=output_data, mean=mean_data, invstddev=invstddev_data)
+    np.savez(output_file, output=output_data)
     print(f"✅ Output data saved to {output_file}")
     
     # Print additional information
@@ -126,14 +114,12 @@ def generate_layernorm_onnx_and_data(save_path=None):
     print(f"📊 Scale shape: {scale_data.shape}")
     print(f"📊 Bias shape: {bias_data.shape}")
     print(f"📊 Output shape: {output_data.shape}")
-    print(f"📊 Mean shape: {mean_data.shape}")
-    print(f"📊 InvStdDev shape: {invstddev_data.shape}")
     print(f"📊 Normalization axis: {axis}")
     print(f"📊 Epsilon: {epsilon}")
     
-    print("\n✅ Reference outputs generated using ONNX Runtime with the official")
-    print("  'LayerNormalization' operator from opset 17. The third output is the")
-    print("  inverse standard deviation, as per the ONNX standard.")
+    print("\n✅ Reference output generated using ONNX Runtime with the official")
+    print("  'LayerNormalization' operator from opset 17. Mean and inverse standard deviation")
+    print("  outputs have been removed as requested.")
 
 if __name__ == "__main__":
     save_path = sys.argv[1] if len(sys.argv) > 1 else None

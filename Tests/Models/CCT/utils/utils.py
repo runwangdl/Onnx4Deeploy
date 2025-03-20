@@ -120,6 +120,9 @@ def run_train_onnx_optimization(onnx_train_file, onnx_output_file):
     print(
         f"✅ Successfully fixed LayerNormalization opset version. Saved as {onnx_train_file}"
     )
+    optimize_softmax_axis(onnx_train_file, onnx_train_file)
+    print(
+        f"✅ Successfully optimized Softmax axis. Saved as {onnx_train_file}")
 
     optimize_reshape_fusion(onnx_train_file, onnx_train_file)
     print(
