@@ -1,4 +1,4 @@
-cd /app/scripts/Compact-Transformers
+cd /app/scripts/01Compact-Transformers
 
 python testgenerate.py
 
@@ -19,6 +19,6 @@ python -m onnxruntime.transformers.optimizer \
  --disable_skip_layer_norm \
  --disable_bias_gelu
 
-cd /app/scripts/Compact-Transformers
+cd /app/scripts/01Compact-Transformers
 python RemoveAddBroadcast.py
 python RemoveGemmBroadcast.py
