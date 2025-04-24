@@ -12,6 +12,7 @@ import copy
 from .fixshape import print_onnx_shapes
 from .trainoptimization import *
 import random
+from onnx import TensorProto
 
 def make_c_name(name, count=0):
     if name.lower() in ["input", "output"]:
@@ -19,6 +20,8 @@ def make_c_name(name, count=0):
 
     name = re.sub(r'input|output', '', name, flags=re.IGNORECASE)  # Remove 'input' and 'output' from other names
     name = re.sub(r'[^a-zA-Z0-9_]', '_', name)
+    if name is None or name == "":
+        name = f'node_{count}'
     if name[0].isdigit() or name[0] == '_':
         name = f'node_{count}' + name
     return name
@@ -48,6 +51,42 @@ def rename_and_save_onnx(input_onnx, output_onnx):
     model = rename_onnx_nodes(model)
     onnx.save(model, output_onnx)
     print(f"✅ Renamed ONNX model saved to {output_onnx}")
+
+def run_onnx_optimization_infer(onnx_file, embedding_dim, num_heads, input_shape):
+    
+    batch_size, channels, height, width = input_shape  # Extract input dimensions
+    try:
+        print("🔹 Fixing dynamic shape...")
+        subprocess.run([
+            "python", "-m", "onnxruntime.tools.make_dynamic_shape_fixed",
+            "--input_name", "input",
+            "--input_shape", f"{batch_size},{channels},{height},{width}",
+            onnx_file, onnx_file
+        ], check=True)
+
+        print("🔹 Running symbolic shape inference...")
+        subprocess.run([
+            "python", "-m", "onnxruntime.tools.symbolic_shape_infer",
+            "--input", onnx_file, "--output", onnx_file, "--verbose", "3"
+        ], check=True)
+
+        print("🔹 Optimizing ONNX model for ViT...")
+        subprocess.run([
+            "python", "-m", "onnxruntime.transformers.optimizer",
+            "--input", onnx_file, "--output", onnx_file,
+            "--model_type", "vit",
+            "--num_heads", str(num_heads),  # Controlled via config
+            "--hidden_size", str(embedding_dim),  # Ensures hidden size = embedding_dim
+            "--use_multi_head_attention",
+            "--disable_bias_skip_layer_norm",
+            "--disable_skip_layer_norm",
+            "--disable_bias_gelu"
+        ], check=True)
+
+        print("✅ ONNX model optimization complete!")
+
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Error during ONNX optimization: {e}")
 
 def run_onnx_optimization(onnx_file, embedding_dim, num_heads, input_shape):
     """ Run ONNX Runtime tools to optimize the model """
@@ -350,3 +389,62 @@ def randomize_onnx_initializers(model, seed=None, exclude_patterns=None):
     print(f"- Modified initializers: {modified_count}")
 
     return model
+
+def type_inference(input_model_path, output_model_path):
+    """
+    Perform type inference on ONNX model, setting float32 type for variables without explicit types.
+    
+    Args:
+        input_model_path: Input ONNX model path
+        output_model_path: Output ONNX model path
+    """
+    # Load the ONNX model
+    model = onnx.load(input_model_path)
+    graph = model.graph
+    
+    # Process input tensors
+    for input_tensor in graph.input:
+        if not input_tensor.type.tensor_type.elem_type:
+            print(f"Setting input variable {input_tensor.name} type to FLOAT")
+            input_tensor.type.tensor_type.elem_type = TensorProto.FLOAT
+    
+    # Process output tensors
+    for output_tensor in graph.output:
+        if not output_tensor.type.tensor_type.elem_type:
+            print(f"Setting output variable {output_tensor.name} type to FLOAT")
+            output_tensor.type.tensor_type.elem_type = TensorProto.FLOAT
+    
+    # Process intermediate variables
+    for value_info in graph.value_info:
+        if not value_info.type.tensor_type.elem_type:
+            print(f"Setting intermediate variable {value_info.name} type to FLOAT")
+            value_info.type.tensor_type.elem_type = TensorProto.FLOAT
+    
+    # Check for any tensors mentioned in nodes but missing type info
+    processed_tensors = set([tensor.name for tensor in graph.input] + 
+                           [tensor.name for tensor in graph.output] + 
+                           [tensor.name for tensor in graph.value_info])
+    
+    missing_tensors = set()
+    for node in graph.node:
+        for input_name in node.input:
+            if input_name not in processed_tensors and input_name:
+                missing_tensors.add(input_name)
+        for output_name in node.output:
+            if output_name not in processed_tensors and output_name:
+                missing_tensors.add(output_name)
+    
+    # Add missing tensors to value_info with FLOAT type (keeping existing shapes)
+    for tensor_name in missing_tensors:
+        # Create a basic ValueInfo for the tensor (shape will be inferred by ONNX)
+        tensor_value_info = onnx.helper.make_tensor_value_info(
+            name=tensor_name,
+            elem_type=TensorProto.FLOAT,
+            shape=None  # Let ONNX infer the shape
+        )
+        graph.value_info.append(tensor_value_info)
+        print(f"Added missing tensor {tensor_name} with FLOAT type")
+    
+    # Save the modified model
+    onnx.save(model, output_model_path)
+    print(f"Successfully saved type-inferred model to {output_model_path}")

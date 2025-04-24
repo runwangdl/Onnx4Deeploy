@@ -151,8 +151,8 @@ def generate_cct_training_onnx(save_path=None):
     learning_rate = load_train_config()
     add_sgd_nodes(onnx_output_file, onnx_output_file, learning_rate=learning_rate)
     infer_shapes_with_custom_ops(onnx_output_file, onnx_output_file)
+    type_inference(onnx_output_file, onnx_output_file)
     print(f"✅ Added SGD nodes to {onnx_output_file}")
-
 
 if __name__ == "__main__":
     save_path = sys.argv[1] if len(sys.argv) > 1 else None

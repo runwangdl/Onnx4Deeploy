@@ -5,7 +5,7 @@ import sys
 import os
 import torch
 from CCT.cct import cct_test  
-from utils.utils import run_onnx_optimization, load_config, rename_and_save_onnx, randomize_layernorm_params
+from utils.utils import *
 
 def generate_cct_onnx_and_data(save_path=None):
     """ Generate ONNX model for CCT based on config, with optional save path """
@@ -50,13 +50,14 @@ def generate_cct_onnx_and_data(save_path=None):
         output_names=["output"],
         dynamic_axes={"input": {0: "batch_size"}, "output": {0: "batch_size"}},
     )
-
+    onnx_model = onnx.load(onnx_file)
+    onnx_model = randomize_onnx_initializers(onnx_model)
     print(f"✅ ONNX model saved to {onnx_file}")
-    
     rename_and_save_onnx(onnx_file, onnx_file)
 
-    run_onnx_optimization(onnx_file, embedding_dim, num_heads, input_shape)
+    run_onnx_optimization_infer(onnx_file, embedding_dim, num_heads, input_shape)
 
+    rename_and_save_onnx(onnx_file, onnx_file)
     ort_session = ort.InferenceSession(onnx_file)
     output_data = ort_session.run(None, {"input": input_data})[0]
 

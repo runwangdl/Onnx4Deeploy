@@ -1,0 +1,3 @@
+matmul:
+  input_a_shape: [1, 160]  # [M, K] - First matrix dimensions
+  input_b_shape: [160, 16]  # [K, N] - Second matrix dimensions

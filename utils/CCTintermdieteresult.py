@@ -324,9 +324,9 @@ def main(model_path, input_path, save_dir="node_outputs", print_to_console=True)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Extract outputs from all nodes and initializers in an ONNX model.")
-    parser.add_argument("--model", type=str, default="/app/Onnx4Deeploy/Tests/Models/CCT/onnx/CCT_train_8_3_1_1/network_train.onnx", 
+    parser.add_argument("--model", type=str, default="/app/Onnx4Deeploy/Tests/Models/CCT/onnx/CCT_train_16_8_1_1/network_train.onnx", 
                         help="Path to the ONNX model")
-    parser.add_argument("--input", type=str, default="/app/Onnx4Deeploy/Tests/Models/CCT/onnx/CCT_train_8_3_1_1/inputs.npz",
+    parser.add_argument("--input", type=str, default="/app/Onnx4Deeploy/Tests/Models/CCT/onnx/CCT_train_16_8_1_1/inputs.npz",
                         help="Path to the input data (NPZ format)")
     parser.add_argument("--output_dir", type=str, default="node_outputs",
                         help="Directory to save the node outputs and initializers")

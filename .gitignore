@@ -13,3 +13,5 @@ Tests/Operators/testFloatSGD/onnx/sgd_test/inputs.npz
 Tests/Operators/testFloatSGD/onnx/sgd_test/network.onnx
 Tests/Operators/testFloatSGD/onnx/sgd_test/outputs.npz
 Tests/Operators/testFloatSGD/onnx/sgd_test/sgd_reference.py
+Report/*
+
