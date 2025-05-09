@@ -1,6 +1,7 @@
 import onnx
 from onnx import helper, shape_inference
 from onnx import TensorProto
+import re
 
 def add_sgd_nodes(model_path, output_path, learning_rate=0.01):
     """
@@ -25,14 +26,14 @@ def add_sgd_nodes(model_path, output_path, learning_rate=0.01):
     
     for output in graph.output:
         original_outputs.append(output)
-        if output.name == "node_133_classifier_fc_Gemm_Grad_dC_reduced":
-            node_133_output = output
+        if re.match(r"node_\d+_classifier_fc_Gemm_Grad_dC_reduced", output.name):
+            node_classifier_output = output
             grad_outputs_to_remove.append(output)
         elif output.name == "classifier_fc_weight_grad":
             classifier_fc_weight_grad = output
             grad_outputs_to_remove.append(output)
     
-    if not node_133_output or not classifier_fc_weight_grad:
+    if not node_classifier_output or not classifier_fc_weight_grad:
         raise ValueError("Could not find required output nodes")
     
     # Find the original classifier_fc_Gemm node to get initializers
@@ -54,7 +55,7 @@ def add_sgd_nodes(model_path, output_path, learning_rate=0.01):
     bias_shape = list(numpy_helper.to_array(classifier_fc_bias).shape)  # Convert to list
     
     weight_grad_shape = get_output_shape(graph, "classifier_fc_weight_grad")
-    bias_grad_shape = get_output_shape(graph, "node_133_classifier_fc_Gemm_Grad_dC_reduced")
+    bias_grad_shape = get_output_shape(graph, "classifier_fc_weight_grad")
     
     print(f"Weight shape: {weight_shape}, Weight grad shape: {weight_grad_shape}")
     print(f"Bias shape: {bias_shape}, Bias grad shape: {bias_grad_shape}")
@@ -95,7 +96,7 @@ def add_sgd_nodes(model_path, output_path, learning_rate=0.01):
         op_type="SGD",
         inputs=[
             "classifier_fc_bias",             # bias to update
-            "node_133_classifier_fc_Gemm_Grad_dC_reduced",  # gradient
+            "classifier_fc_weight_grad",  # gradient
         ],
         outputs=["classifier_fc_bias_updated"],
         name="classifier_fc_bias_sgd",

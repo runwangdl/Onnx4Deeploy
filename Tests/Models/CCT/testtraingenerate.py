@@ -36,7 +36,8 @@ def generate_cct_training_onnx(save_path=None):
         num_classes=num_classes, 
         embedding_dim=embedding_dim, 
         num_heads=num_heads,  
-        num_layers=num_layers  
+        num_layers=num_layers,
+        n_conv_layers = 2
     )
     model.train()
     model = randomize_layernorm_params(model)

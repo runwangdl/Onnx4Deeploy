@@ -1,2 +1,2 @@
 adder:
-  input_shape: [1, 64, 32]
+  input_shape: [1, 64, 128]

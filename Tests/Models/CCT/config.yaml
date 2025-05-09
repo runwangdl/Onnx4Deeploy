@@ -1,10 +1,10 @@
 cct:
   pretrained: False
-  img_size: 16          
+  img_size: 32          
   num_classes: 10
-  embedding_dim: 256    
+  embedding_dim: 64
   num_heads: 1         
-  num_layers: 1
+  num_layers: 2
   batch_size: 1        
   opset_version: 12
 

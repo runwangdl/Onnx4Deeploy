@@ -31,7 +31,8 @@ def generate_cct_onnx_and_data(save_path=None):
         num_classes=num_classes, 
         embedding_dim=embedding_dim, 
         num_heads=num_heads,  
-        num_layers=num_layers  
+        num_layers=num_layers,
+        n_conv_layers=2  
     )
     model.eval()
     model = randomize_layernorm_params(model)
@@ -56,7 +57,6 @@ def generate_cct_onnx_and_data(save_path=None):
     rename_and_save_onnx(onnx_file, onnx_file)
 
     run_onnx_optimization_infer(onnx_file, embedding_dim, num_heads, input_shape)
-
     rename_and_save_onnx(onnx_file, onnx_file)
     ort_session = ort.InferenceSession(onnx_file)
     output_data = ort_session.run(None, {"input": input_data})[0]

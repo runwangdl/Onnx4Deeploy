@@ -57,10 +57,13 @@ def generate_conv2d_onnx_and_data(save_path=None):
     weight = np.random.randn(*weight_shape).astype(np.float32)
     bias = np.random.randn(out_channels).astype(np.float32) if use_bias else None
 
+    weight_hwio = weight.transpose(2, 3, 1, 0)  # [kH, kW, Cin, Cout]
+    weight_onnx = weight_hwio.transpose(3, 2, 0, 1)  # 回到[Cout, Cin, kH, kW]
+
     # Define ONNX tensors
     input_tensor = helper.make_tensor_value_info("input", TensorProto.FLOAT, input_data.shape)
     output_tensor = helper.make_tensor_value_info("output", TensorProto.FLOAT, output_shape)
-    weight_tensor = helper.make_tensor("weight", TensorProto.FLOAT, weight.shape, weight.flatten())
+    weight_tensor = helper.make_tensor("weight", TensorProto.FLOAT, weight.shape, weight_onnx.flatten())
 
     initializers = [weight_tensor]
 
