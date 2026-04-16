@@ -40,6 +40,7 @@ def list_available_models():
         LightweightCnnExporter,
         MambaExporter,
         MIBMInetExporter,
+        MobileNetV1Exporter,
         MobileNetV2Exporter,
         MobileViTExporter,
         ResNetExporter,
@@ -174,6 +175,14 @@ def list_available_models():
             "input_shape": "(B, 3, 96, 96)",
             "classes": 2,
             "config": {"width_mult": 0.35, "img_size": 96, "num_classes": 2},
+        },
+        # VWW — MLPerf Tiny reference MobileNetV1 (alpha=0.25)
+        "MobileNetV1": {
+            "class": MobileNetV1Exporter,
+            "description": "MobileNetV1-0.25 (MLperf Tiny VWW reference, 96×96, 2-class)",
+            "input_shape": "(B, 3, 96, 96)",
+            "classes": 2,
+            "config": {"width_mult": 0.25, "img_size": 96, "num_classes": 2},
         },
         # KWS — Keyword Spotting (DS-CNN-XS, MFCC 25×10, 12 classes)
         "DSCNN": {
