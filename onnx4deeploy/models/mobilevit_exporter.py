@@ -40,11 +40,15 @@ class MobileViTExporter(BaseONNXExporter):
         # Default MobileViT configuration
         config = {
             "batch_size": 1,
-            "img_size": 256,  # MobileViT uses 256x256
-            "input_channels": 3,  # RGB
+            # Paper uses 256×256. We default to 128×128 for deployment on
+            # tightly-budgeted targets (e.g. Siracusa): activations and tile
+            # search both shrink ~4× without hurting the layout (128 / 32 = 4
+            # is still divisible by every stage's 2×2 patch).
+            "img_size": 128,
+            "input_channels": 3,  # RGB (lifted internally to 8 by input_lift)
             "num_classes": 1000,  # ImageNet classes
-            "opset_version": 17,  # LayerNorm requires opset 17+
-            "variant": "mobile_vit_xs",  # Options: "mobile_vit_xxs", "mobile_vit_xs", "mobile_vit_s"
+            "opset_version": 20,  # 17+ LayerNorm; 20+ native Gelu (avoid Erf expansion)
+            "variant": "mobile_vit_xxs",  # Options: "mobile_vit_xxs", "mobile_vit_xs", "mobile_vit_s"
             # Training configuration
             "training_strategy": "full",  # Options: "full", "head_only", "custom"
             "custom_trainable_params": [],

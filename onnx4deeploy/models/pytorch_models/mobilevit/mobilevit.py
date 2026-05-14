@@ -32,14 +32,17 @@ import torch.nn.init as init
 
 
 class SiLU(nn.Module):
-    """SiLU activation that exports cleanly to ONNX.
+    """Activation block — uses GELU under the hood for deploy compatibility.
 
-    Uses torch.nn.functional.silu which has built-in ONNX support
-    with proper shape inference.
+    Class name kept as 'SiLU' to avoid churning every call site. Internally
+    calls torch.nn.functional.gelu because the Siracusa PULP FP32 kernel set
+    has no Sigmoid (and therefore no native SiLU = x * sigmoid(x)) operator.
+    GELU is the closest supported smooth activation and has its own dedicated
+    PULP kernel.
     """
 
     def forward(self, x):
-        return torch.nn.functional.silu(x)
+        return torch.nn.functional.gelu(x)
 
 
 class ConvBNAct(nn.Module):
@@ -377,9 +380,13 @@ class MobileViTBlock(nn.Module):
             ]
         )
 
-        # Project back + fusion (MobileViT definition)
+        # Project back + fusion. Paper uses concat([shortcut, proj], dim=1) +
+        # a 3×3 conv on 2·C_in. We replace concat with elementwise add so
+        # Deeploy doesn't need an FP32 Concat kernel AND so the fusion conv's
+        # tile constraints don't have to align across two concat-inputs.
+        # Fusion conv input channel count drops from 2·C_in to C_in.
         self.proj = ConvBNAct(transformer_dim, in_channels, kernel_size=1)
-        self.fusion = ConvBNAct(in_channels * 2, in_channels, kernel_size=3)
+        self.fusion = ConvBNAct(in_channels, in_channels, kernel_size=3)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # x: [B, C_in, H, W] where B/H/W are fixed constants
@@ -411,9 +418,8 @@ class MobileViTBlock(nn.Module):
         # Project back: [B, C_in, H, W]
         y = self.proj(y)
 
-        # Fusion: concat + 3x3 conv (MobileViT definition)
-        y = torch.cat([shortcut, y], dim=1)  # [B, 2*C_in, H, W]
-        y = self.fusion(y)  # [B, C_in, H, W]
+        # Fusion: elementwise add instead of concat. See __init__ note.
+        y = self.fusion(shortcut + y)  # [B, C_in, H, W]
 
         return y
 
@@ -508,8 +514,16 @@ class MobileViT(nn.Module):
             (self.image_h // 32, self.image_w // 32),  # MobileViT block 3: 8x8
         ]
 
-        # Initial convolution (stem)
-        self.conv1 = ConvBNAct(3, channels[0], kernel_size=3, stride=2)
+        # 1×1 channel lift 3 → 8 before the stem. RGB's channel=3 is prime,
+        # so tile_C is forced to {1,3} and that constraint propagates through
+        # the entire layout-transposed graph. Lifting to 8 (= 2³) at the
+        # input gives the tiler real factoring freedom on every downstream
+        # axis. ~24 extra parameters.
+        self.input_lift = nn.Conv2d(3, 8, kernel_size=1, bias=False)
+        self.input_lift_bn = nn.BatchNorm2d(8)
+
+        # Stem (now takes 8-channel input).
+        self.conv1 = ConvBNAct(8, channels[0], kernel_size=3, stride=2)
 
         # Stage 1: MV2 blocks
         self.mv2_1 = InvertedResidual(
@@ -577,8 +591,12 @@ class MobileViT(nn.Module):
         )
         self.conv2 = ConvBNAct(channels[8], channels[9], kernel_size=1)
 
-        # Classifier head
-        self.pool = nn.AdaptiveAvgPool2d(1)
+        # Classifier head.
+        # NOTE: `nn.AdaptiveAvgPool2d(1)` exports to ONNX `GlobalAveragePool`,
+        # which vanilla pulp-platform/Deeploy:devel does not map on Siracusa.
+        # `x.mean(dim=(2,3), keepdim=True)` exports to `ReduceMean axes=[2,3]`
+        # (mathematically identical) which IS supported. Implemented inline in
+        # `forward` — no module needed.
         self.flatten = nn.Flatten(start_dim=1)  # Use nn.Flatten for ONNX
         self.fc = nn.Linear(channels[9], num_classes)
 
@@ -622,8 +640,12 @@ class MobileViT(nn.Module):
         Returns:
             Output logits [B, num_classes]
         """
+        # Input lift: 3 → 8 channels (deploy-friendly factoring)
+        x = self.input_lift(x)
+        x = self.input_lift_bn(x)
+
         # Stem
-        x = self.conv1(x)  # [B, 16, 128, 128]
+        x = self.conv1(x)  # [B, channels[0], H/2, W/2]
 
         # Stage 1: MV2 blocks with downsampling
         x = self.mv2_1(x)  # [B, 32, 128, 128]
@@ -645,9 +667,9 @@ class MobileViT(nn.Module):
         x = self.mvit3(x)  # [B, 96, 8, 8] (CNN + Transformer)
         x = self.conv2(x)  # [B, 384, 8, 8]
 
-        # Classifier head
-        x = self.pool(x)  # [B, 384, 1, 1]
-        x = self.flatten(x)  # [B, 384]
+        # Classifier head — ReduceMean over spatial, then Flatten + Linear
+        x = x.mean(dim=(2, 3), keepdim=True)  # [B, channels[9], 1, 1]
+        x = self.flatten(x)  # [B, channels[9]]
         x = self.fc(x)  # [B, num_classes]
 
         return x
