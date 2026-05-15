@@ -102,13 +102,9 @@ class QuantMobileNetV1(nn.Module):
         self.ds_blocks = nn.Sequential(*blocks)
         self.last_channel = in_ch
 
-        self.pool_dq = qnn.QuantIdentity(
-            act_quant=Int8ActPerTensorFloat, return_quant_tensor=False
-        )
+        self.pool_dq = qnn.QuantIdentity(act_quant=Int8ActPerTensorFloat, return_quant_tensor=False)
         self.flatten = nn.Flatten(start_dim=1)
-        self.fc_iq = qnn.QuantIdentity(
-            act_quant=Int8ActPerTensorFloat, return_quant_tensor=True
-        )
+        self.fc_iq = qnn.QuantIdentity(act_quant=Int8ActPerTensorFloat, return_quant_tensor=True)
         self.classifier = qnn.QuantLinear(
             self.last_channel,
             num_classes,

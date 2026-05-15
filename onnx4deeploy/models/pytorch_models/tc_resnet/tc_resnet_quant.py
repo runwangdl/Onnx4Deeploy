@@ -61,15 +61,11 @@ class QuantTCResBlock(nn.Module):
         self.bn2 = nn.BatchNorm2d(out_channels)
 
         self.downsample = downsample
-        self.dq_main = qnn.QuantIdentity(
-            act_quant=Int8ActPerTensorFloat, return_quant_tensor=False
-        )
+        self.dq_main = qnn.QuantIdentity(act_quant=Int8ActPerTensorFloat, return_quant_tensor=False)
         self.dq_identity = qnn.QuantIdentity(
             act_quant=Int8ActPerTensorFloat, return_quant_tensor=False
         )
-        self.add_q = qnn.QuantIdentity(
-            act_quant=Int8ActPerTensorFloat, return_quant_tensor=True
-        )
+        self.add_q = qnn.QuantIdentity(act_quant=Int8ActPerTensorFloat, return_quant_tensor=True)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Two 1×k convs with residual skip."""
@@ -148,13 +144,9 @@ class QuantTCResNet(nn.Module):
             in_ch = out_ch
         self.stages = nn.Sequential(*stages)
 
-        self.pool_dq = qnn.QuantIdentity(
-            act_quant=Int8ActPerTensorFloat, return_quant_tensor=False
-        )
+        self.pool_dq = qnn.QuantIdentity(act_quant=Int8ActPerTensorFloat, return_quant_tensor=False)
         self.flatten = nn.Flatten(start_dim=1)
-        self.fc_iq = qnn.QuantIdentity(
-            act_quant=Int8ActPerTensorFloat, return_quant_tensor=True
-        )
+        self.fc_iq = qnn.QuantIdentity(act_quant=Int8ActPerTensorFloat, return_quant_tensor=True)
         self.fc = qnn.QuantLinear(
             in_ch,
             num_classes,
@@ -178,9 +170,7 @@ class QuantTCResNet(nn.Module):
         return x
 
 
-def quant_tc_resnet8(
-    num_classes: int = 12, n_mfcc: int = 40, n_time: int = 49
-) -> QuantTCResNet:
+def quant_tc_resnet8(num_classes: int = 12, n_mfcc: int = 40, n_time: int = 49) -> QuantTCResNet:
     """Brevitas-quantized TC-ResNet8."""
     return QuantTCResNet(
         num_classes=num_classes,
@@ -192,9 +182,7 @@ def quant_tc_resnet8(
     )
 
 
-def quant_tc_resnet14(
-    num_classes: int = 12, n_mfcc: int = 40, n_time: int = 49
-) -> QuantTCResNet:
+def quant_tc_resnet14(num_classes: int = 12, n_mfcc: int = 40, n_time: int = 49) -> QuantTCResNet:
     """Brevitas-quantized TC-ResNet14."""
     return QuantTCResNet(
         num_classes=num_classes,

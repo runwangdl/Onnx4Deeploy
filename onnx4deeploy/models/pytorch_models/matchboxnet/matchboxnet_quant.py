@@ -69,15 +69,11 @@ class QuantMatchboxBlock(nn.Module):
         self.relu = qnn.QuantReLU(bit_width=8, return_quant_tensor=True)
 
         # Strip QuantTensors around the residual add.
-        self.dq_main = qnn.QuantIdentity(
-            act_quant=Int8ActPerTensorFloat, return_quant_tensor=False
-        )
+        self.dq_main = qnn.QuantIdentity(act_quant=Int8ActPerTensorFloat, return_quant_tensor=False)
         self.dq_identity = qnn.QuantIdentity(
             act_quant=Int8ActPerTensorFloat, return_quant_tensor=False
         )
-        self.add_q = qnn.QuantIdentity(
-            act_quant=Int8ActPerTensorFloat, return_quant_tensor=True
-        )
+        self.add_q = qnn.QuantIdentity(act_quant=Int8ActPerTensorFloat, return_quant_tensor=True)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Body branch + skip branch, then ReLU."""
@@ -135,9 +131,7 @@ class QuantMatchboxNet(nn.Module):
             return_quant_tensor=True,
         )
 
-        self.pool_dq = qnn.QuantIdentity(
-            act_quant=Int8ActPerTensorFloat, return_quant_tensor=False
-        )
+        self.pool_dq = qnn.QuantIdentity(act_quant=Int8ActPerTensorFloat, return_quant_tensor=False)
         self.flatten = nn.Flatten(start_dim=1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:

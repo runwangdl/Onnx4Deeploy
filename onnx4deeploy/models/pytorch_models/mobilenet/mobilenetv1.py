@@ -77,7 +77,9 @@ class MobileNetV1(nn.Module):
         ]
 
         # Stem: standard 3×3 stride-2 conv
-        self.stem_conv = nn.Conv2d(input_channels, c(32), kernel_size=3, stride=2, padding=1, bias=False)
+        self.stem_conv = nn.Conv2d(
+            input_channels, c(32), kernel_size=3, stride=2, padding=1, bias=False
+        )
         self.stem_bn = nn.BatchNorm2d(c(32))
         self.relu = nn.ReLU(inplace=False)
 

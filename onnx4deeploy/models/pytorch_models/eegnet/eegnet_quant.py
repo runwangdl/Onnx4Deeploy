@@ -69,9 +69,7 @@ class QuantEEGNet(nn.Module):
         # Use AvgPool2D — exports as ONNX AveragePool which Deeploy's PULP
         # AveragePool2DParser handles. (ReduceMean only does global average.)
         self.pool1 = nn.AvgPool2d(kernel_size=(1, 4), stride=(1, 4))
-        self.pool1_dq = qnn.QuantIdentity(
-            act_quant=Int8ActPerTensorFloat, return_quant_tensor=True
-        )
+        self.pool1_dq = qnn.QuantIdentity(act_quant=Int8ActPerTensorFloat, return_quant_tensor=True)
 
         # Block 2
         self.sep_depthwise = qnn.QuantConv2d(
@@ -83,9 +81,7 @@ class QuantEEGNet(nn.Module):
             bias=True,
             **_QUANT_KW,
         )
-        self.sep_pointwise = qnn.QuantConv2d(
-            F1 * D, F2, kernel_size=1, bias=True, **_QUANT_KW
-        )
+        self.sep_pointwise = qnn.QuantConv2d(F1 * D, F2, kernel_size=1, bias=True, **_QUANT_KW)
         self.bn3 = nn.BatchNorm2d(F2)
         self.relu_b2 = qnn.QuantReLU(bit_width=8, return_quant_tensor=True)
 
@@ -98,9 +94,7 @@ class QuantEEGNet(nn.Module):
         self._flat_features = F2 * 1 * time_after
 
         self.flatten = nn.Flatten(start_dim=1)
-        self.fc_iq = qnn.QuantIdentity(
-            act_quant=Int8ActPerTensorFloat, return_quant_tensor=True
-        )
+        self.fc_iq = qnn.QuantIdentity(act_quant=Int8ActPerTensorFloat, return_quant_tensor=True)
         self.classifier = qnn.QuantLinear(
             self._flat_features,
             num_classes,
