@@ -548,10 +548,16 @@ def create_quant_pipeline(inputs_npz_path: Optional[str] = None) -> "Optimizatio
     pipeline.add_pass(QuantFoldQcdqToQuantDequantPass())
     # 4. Compile-time static quantization of weight/bias constants
     pipeline.add_pass(QuantConstfoldQuantOfInitializerPass())
-    # 5. QDQ → RequantShift core translation (mid-network)
+    # 5. QDQ → RequantShift core translation (mid-network).
     pipeline.add_pass(QuantFoldDequantQuantToRequantShiftPass())
-    pipeline.add_pass(QuantSkipDequantBeforeIntegerOpPass())
-    pipeline.add_pass(QuantFoldStandaloneQuantToRequantShiftPass())
+    # The next two passes mutually enable each other: skip_dequant rewires
+    # downstream consumers, which exposes new int_op→Quant patterns for
+    # fold_standalone to collapse. Run them 3 times back-to-back so models
+    # with non-trivial layout chains (e.g. EEGNet's pool→Dequant→Flatten→
+    # Quant→Gemm) converge to a Quant/Dequant-free graph.
+    for _ in range(3):
+        pipeline.add_pass(QuantSkipDequantBeforeIntegerOpPass())
+        pipeline.add_pass(QuantFoldStandaloneQuantToRequantShiftPass())
     # 6. Graph-boundary normalisation
     pipeline.add_pass(QuantSkipLeadingQuantDequantPass())
     # 7. Deeploy folding-rule patch (Conv-bias→RQS-add)

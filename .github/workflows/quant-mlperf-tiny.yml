@@ -28,12 +28,18 @@ jobs:
         # One job per MLperf Tiny benchmark — runs in parallel and surfaces
         # per-model failures clearly in the Checks UI.
         model:
+          # MLperf Tiny v1.0
           - ResNet8
           - MobileNetV2-VWW
           - DSCNN
           - DSCNN-S
           - Autoencoder
           - Autoencoder-MLPerf
+          # Model Zoo batch 1 — embedded baselines
+          - MobileNetV1-VWW
+          - TC-ResNet8
+          - EEGNet
+          - MatchboxNet
 
     steps:
       - name: Checkout code
@@ -74,6 +80,7 @@ jobs:
 
           allowed = {
               "Conv","Gemm","MatMul","Add","ReduceMean",
+              "AveragePool","MaxPool",
               "Flatten","Reshape","Transpose","Squeeze","Unsqueeze",
               "RequantShift",
           }

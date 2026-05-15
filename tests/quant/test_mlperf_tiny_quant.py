@@ -36,6 +36,8 @@ _ALLOWED_OPS = {
     "MatMul",
     "Add",
     "ReduceMean",
+    "AveragePool",  # EEGNet uses two AvgPool2D layers (stride 4 and 8 over time).
+    "MaxPool",  # Symmetric admission for non-AvgPool downsampling.
     "Flatten",
     "Reshape",
     "Transpose",
@@ -55,6 +57,11 @@ _MLPERF_TINY_QUANT_MODELS = [
     ("DSCNN-S", 20),
     ("Autoencoder", 10),
     ("Autoencoder-MLPerf", 10),
+    # Model Zoo batch 1 — embedded baselines beyond MLperf Tiny v1.0.
+    ("MobileNetV1-VWW", 50),  # 27 Conv + 57 RQS + ReduceMean/Flatten/Gemm
+    ("TC-ResNet8", 30),  # 16 Conv + 6 Add + 50 RQS = ~75 nodes
+    ("EEGNet", 15),  # 4 Conv + 2 AvgPool + 10 RQS = 18 nodes
+    ("MatchboxNet", 40),  # 19 Conv + 3 Add + 41 RQS = ~65 nodes
 ]
 
 

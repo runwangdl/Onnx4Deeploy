@@ -553,7 +553,20 @@ def constfold_quant_of_initializer(graph: onnx.GraphProto) -> int:
     return len(nodes_to_remove)
 
 
-_INTEGER_OPS_AFTER_MERGE = {"Conv", "Gemm", "MatMul", "Add", "ReduceMean"}
+_INTEGER_OPS_AFTER_MERGE = {
+    "Conv",
+    "Gemm",
+    "MatMul",
+    "Add",
+    "ReduceMean",
+    # AveragePool / MaxPool operate elementwise / by reduction and don't
+    # need a Dequant→op→Quant detour: Dequant can be dropped before them
+    # (the running int8 scale stays valid), and a trailing Quant after them
+    # is folded into a RequantShift by the next pass. Important for models
+    # like EEGNet that use AvgPool to reduce non-global temporal windows.
+    "AveragePool",
+    "MaxPool",
+}
 _LAYOUT_OPS = {"Transpose", "Flatten", "Reshape", "Squeeze", "Unsqueeze"}
 
 
@@ -581,7 +594,11 @@ def skip_dequant_before_integer_op(graph: onnx.GraphProto) -> int:
             continue
 
         # Walk through Transpose / Flatten / Reshape transparently — these
-        # are shape-only ops that don't care about int vs fp32.
+        # are shape-only ops that don't care about int vs fp32. Also walk
+        # through ``Quant`` and ``Dequant``: a downstream Quant will be folded
+        # into a RequantShift by the next pass, and a downstream Dequant will
+        # itself be dropped on a later iteration. The point is to drop *this*
+        # Dequant whenever the chain *eventually* lands on an integer op.
         def _resolves_to_int_op(start_node: onnx.NodeProto) -> bool:
             visited = set()
             stack = [start_node]
@@ -592,7 +609,7 @@ def skip_dequant_before_integer_op(graph: onnx.GraphProto) -> int:
                 visited.add(id(cur))
                 if cur.op_type in _INTEGER_OPS_AFTER_MERGE:
                     return True
-                if cur.op_type in {"Transpose", "Flatten", "Reshape", "Squeeze", "Unsqueeze"}:
+                if cur.op_type in _LAYOUT_OPS or cur.op_type in {"Quant", "Dequant"}:
                     for o in cur.output:
                         stack.extend(cons.get(o, []))
                     continue
@@ -625,24 +642,60 @@ def skip_dequant_before_integer_op(graph: onnx.GraphProto) -> int:
 
 def strip_trailing_dequant(graph: onnx.GraphProto) -> int:
     """Remove the trailing ``Dequant`` if it's the last node feeding the
-    graph output. Deeploy has no ``tileConstraint`` for Dequant either, so
-    the network output must be the integer logits directly. (Float-domain
-    interpretation of the int logits is left to the user / test harness.)
+    graph output, and fix up the output dtype to int8.
+
+    Two cases are handled:
+    1. ``Dequant → output`` (direct): drop the Dequant, rename the output.
+    2. ``... → [layout]+ → output`` where no Dequant is present but the
+       producing chain is integer (the earlier passes already dropped any
+       Dequant via ``skip_dequant_before_integer_op``). Here the graph
+       structure is fine — we just need to flip the output dtype proto
+       from fp32 to int8 so downstream consumers see the correct type.
+
+    Deeploy has no ``tileConstraint`` for Dequant, so the network output
+    must be the integer logits directly. Float-domain interpretation is
+    left to the user / test harness.
     """
     if not graph.output:
         return 0
     out_name = graph.output[0].name
     prod = _producer_map(graph)
     leading = prod.get(out_name)
-    if leading is None or leading.op_type != "Dequant":
-        return 0
-    # Make the graph output the Dequant's input directly.
-    src = leading.input[0]
-    graph.output[0].name = src
-    # Adjust output type to int8 (we drop dequant → int8 stays).
-    graph.output[0].type.tensor_type.elem_type = onnx.TensorProto.INT8
-    graph.node.remove(leading)
-    return 1
+
+    # Case 1: direct Dequant → output
+    if leading is not None and leading.op_type == "Dequant":
+        src = leading.input[0]
+        graph.output[0].name = src
+        graph.output[0].type.tensor_type.elem_type = onnx.TensorProto.INT8
+        graph.node.remove(leading)
+        return 1
+
+    # Case 2: walk back through layout ops; if the chain bottoms out at
+    # an integer-producing op (RequantShift / Conv / Gemm / ReduceMean /
+    # Add / AveragePool / MaxPool / MatMul) then the data is already int8
+    # and only the metadata needs fixing.
+    _INT_PRODUCING = {
+        "RequantShift",
+        "Conv",
+        "Gemm",
+        "MatMul",
+        "Add",
+        "ReduceMean",
+        "AveragePool",
+        "MaxPool",
+    }
+    cur = leading
+    visited = set()
+    while cur is not None and id(cur) not in visited:
+        visited.add(id(cur))
+        if cur.op_type in _INT_PRODUCING:
+            graph.output[0].type.tensor_type.elem_type = onnx.TensorProto.INT8
+            return 1
+        if cur.op_type not in _LAYOUT_OPS:
+            break
+        cur = prod.get(cur.input[0])
+
+    return 0
 
 
 def cleanup_orphan_nodes(graph: onnx.GraphProto) -> int:
@@ -782,8 +835,19 @@ def fold_standalone_quant_to_requantshift(graph: onnx.GraphProto, shift_bits: in
         if upstream is None:
             continue
         # Only treat as standalone-on-int when upstream is an integer-producing
-        # op after our other passes.
-        if upstream.op_type not in {"RequantShift", "Add", "Conv", "Gemm", "MatMul", "ReduceMean"}:
+        # op after our other passes. AveragePool/MaxPool are added so EEGNet-
+        # style pools (non-global, e.g. AvgPool stride 4 over time) fold their
+        # trailing Quant into a RequantShift.
+        if upstream.op_type not in {
+            "RequantShift",
+            "Add",
+            "Conv",
+            "Gemm",
+            "MatMul",
+            "ReduceMean",
+            "AveragePool",
+            "MaxPool",
+        }:
             continue
 
         scale_q = float([a.f for a in q_node.attribute if a.name == "scale"][0])
@@ -900,10 +964,23 @@ def run_all_qcdq_to_deeploy_passes(
     _toposort(g)
     stats["fold_dequant_quant_to_requantshift"] = fold_dequant_quant_to_requantshift(g)
     _toposort(g)
-    stats["skip_dequant_before_integer_op"] = skip_dequant_before_integer_op(g)
-    _toposort(g)
-    stats["fold_standalone_quant_to_requantshift"] = fold_standalone_quant_to_requantshift(g)
-    _toposort(g)
+    # Iterate skip_dequant ↔ fold_standalone until stable. The two passes
+    # are mutually enabling: skip_dequant rewires downstream consumers,
+    # which then exposes new ``int_op → Quant`` patterns to fold_standalone.
+    # Worst case is bounded by the number of (Quant, Dequant) nodes left.
+    total_skip = 0
+    total_fold = 0
+    for _ in range(8):  # generous upper bound; pipeline always converges in ≤3
+        n_skip = skip_dequant_before_integer_op(g)
+        _toposort(g)
+        n_fold = fold_standalone_quant_to_requantshift(g)
+        _toposort(g)
+        total_skip += n_skip
+        total_fold += n_fold
+        if n_skip == 0 and n_fold == 0:
+            break
+    stats["skip_dequant_before_integer_op"] = total_skip
+    stats["fold_standalone_quant_to_requantshift"] = total_fold
     stats["skip_leading_quant_dequant"] = skip_leading_quant_dequant(g)
     _toposort(g)
     stats["absorb_conv_bias_into_following_requantshift"] = (

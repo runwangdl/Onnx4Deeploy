@@ -36,16 +36,20 @@ def list_available_models():
         AutoencoderExporter,
         CCTExporter,
         DSCNNExporter,
+        EEGNetExporter,
         EpiDeNetExporter,
         LightweightCnnExporter,
         MambaExporter,
+        MatchboxNetExporter,
         MIBMInetExporter,
+        MobileNetV1Exporter,
         MobileNetV2Exporter,
         MobileViTExporter,
         ResNetExporter,
         SimpleCnnExporter,
         SimpleMlpExporter,
         SleepConViTExporter,
+        TCResNetExporter,
         TinyTransformerExporter,
         TinyViTExporter,
     )
@@ -79,6 +83,53 @@ def list_available_models():
             "input_shape": "(B, 3, 224, 224)",
             "classes": 1000,
             "config": {"width_mult": 1.0},
+        },
+        # ── Model Zoo: Embedded Vision Baselines ────────────────────────────
+        # MobileNetV1 (Howard 2017) — original embedded-vision baseline.
+        "MobileNetV1": {
+            "class": MobileNetV1Exporter,
+            "description": "MobileNetV1 (Howard 2017, embedded baseline)",
+            "input_shape": "(B, 3, 224, 224)",
+            "classes": 1000,
+            "config": {"width_mult": 1.0},
+        },
+        "MobileNetV1-VWW": {
+            "class": MobileNetV1Exporter,
+            "description": "MobileNetV1-0.25 (VWW-style, 96×96, 2 cls, ~220K params)",
+            "input_shape": "(B, 3, 96, 96)",
+            "classes": 2,
+            "config": {"width_mult": 0.25, "img_size": 96, "num_classes": 2},
+        },
+        # TC-ResNet (Choi 2019) — temporal-conv KWS baseline.
+        "TC-ResNet8": {
+            "class": TCResNetExporter,
+            "description": "TC-ResNet8 (KWS, temporal residual, ~66K params)",
+            "input_shape": "(B, 40, 1, 49)",
+            "classes": 12,
+            "config": {"variant": "tc_resnet8", "n_mfcc": 40, "n_time": 49},
+        },
+        "TC-ResNet14": {
+            "class": TCResNetExporter,
+            "description": "TC-ResNet14 (KWS, 6 stages × 2 blocks, ~310K params)",
+            "input_shape": "(B, 40, 1, 49)",
+            "classes": 12,
+            "config": {"variant": "tc_resnet14", "n_mfcc": 40, "n_time": 49},
+        },
+        # EEGNet (Lawhern 2018) — canonical embedded BCI baseline.
+        "EEGNet": {
+            "class": EEGNetExporter,
+            "description": "EEGNet-8,2 (BCI, 8 EEG ch × 128 samples, ~2K params)",
+            "input_shape": "(B, 1, 8, 128)",
+            "classes": 2,
+            "config": {"n_channels": 8, "n_samples": 128, "F1": 8, "D": 2, "kernel_time": 64},
+        },
+        # MatchboxNet (Majumdar & Ginsburg 2020) — NVIDIA's edge-KWS 1D conv.
+        "MatchboxNet": {
+            "class": MatchboxNetExporter,
+            "description": "MatchboxNet 3×2×64 (KWS, time-channel-sep 1D conv, ~140K params)",
+            "input_shape": "(B, 64, 1, 128)",
+            "classes": 12,
+            "config": {"in_features": 64, "n_time": 128, "channels": 64, "R": 2},
         },
         "MobileViT-XXS": {
             "class": MobileViTExporter,
