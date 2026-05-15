@@ -5,6 +5,7 @@
 """Model exporters for Onnx4Deeploy."""
 
 from .autoencoder_exporter import AutoencoderExporter
+from .bc_resnet_exporter import BCResNetExporter
 from .cct_exporter import CCTExporter
 from .dscnn_exporter import DSCNNExporter
 from .eegnet_exporter import EEGNetExporter
@@ -21,11 +22,13 @@ from .simple_cnn_exporter import SimpleCnnExporter
 from .simple_mlp_exporter import SimpleMlpExporter
 from .sleep_convit_exporter import SleepConViTExporter
 from .tc_resnet_exporter import TCResNetExporter
+from .tcn_exporter import TCNExporter
 from .tiny_transformer_exporter import TinyTransformerExporter
 from .tinyvit_exporter import TinyViTExporter
 
 __all__ = [
     "AutoencoderExporter",
+    "BCResNetExporter",
     "CCTExporter",
     "DSCNNExporter",
     "EEGNetExporter",
@@ -41,6 +44,7 @@ __all__ = [
     "MobileViTExporter",
     "MambaExporter",
     "SleepConViTExporter",
+    "TCNExporter",
     "TCResNetExporter",
     "TinyTransformerExporter",
     "TinyViTExporter",

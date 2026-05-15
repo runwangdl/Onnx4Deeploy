@@ -34,6 +34,7 @@ def list_available_models():
     """List available model exporters"""
     from onnx4deeploy.models import (
         AutoencoderExporter,
+        BCResNetExporter,
         CCTExporter,
         DSCNNExporter,
         EEGNetExporter,
@@ -49,6 +50,7 @@ def list_available_models():
         SimpleCnnExporter,
         SimpleMlpExporter,
         SleepConViTExporter,
+        TCNExporter,
         TCResNetExporter,
         TinyTransformerExporter,
         TinyViTExporter,
@@ -130,6 +132,36 @@ def list_available_models():
             "input_shape": "(B, 64, 1, 128)",
             "classes": 12,
             "config": {"in_features": 64, "n_time": 128, "channels": 64, "R": 2},
+        },
+        # BC-ResNet (Kim 2021) — KWS sota with factored frequency/temporal convs.
+        "BC-ResNet1": {
+            "class": BCResNetExporter,
+            "description": "BC-ResNet-1 (KWS, factored freq+temporal conv, ~6K params)",
+            "input_shape": "(B, 1, 40, 49)",
+            "classes": 12,
+            "config": {"variant": "bc_resnet1", "n_mel": 40, "n_time": 49},
+        },
+        "BC-ResNet3": {
+            "class": BCResNetExporter,
+            "description": "BC-ResNet-3 (KWS sota at <100K params)",
+            "input_shape": "(B, 1, 40, 49)",
+            "classes": 12,
+            "config": {"variant": "bc_resnet3", "n_mel": 40, "n_time": 49},
+        },
+        # TCN (Bai 2018) — dilated 1D conv, replaces LSTM on sensor time-series.
+        "TCN-HAR": {
+            "class": TCNExporter,
+            "description": "TCN-HAR (UCI-HAR sensor classification, 9ch × 128 samples)",
+            "input_shape": "(B, 9, 1, 128)",
+            "classes": 6,
+            "config": {"variant": "har", "in_channels": 9, "n_time": 128, "num_classes": 6},
+        },
+        "TCN-ECG": {
+            "class": TCNExporter,
+            "description": "TCN-ECG (single-lead ECG arrhythmia classifier)",
+            "input_shape": "(B, 1, 1, 256)",
+            "classes": 5,
+            "config": {"variant": "ecg", "in_channels": 1, "n_time": 256, "num_classes": 5},
         },
         "MobileViT-XXS": {
             "class": MobileViTExporter,

@@ -40,6 +40,9 @@ jobs:
           - TC-ResNet8
           - EEGNet
           - MatchboxNet
+          # Model Zoo batch 2 — KWS sota + sensor time-series
+          - BC-ResNet1
+          - TCN-HAR
 
     steps:
       - name: Checkout code

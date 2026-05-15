@@ -62,6 +62,9 @@ _MLPERF_TINY_QUANT_MODELS = [
     ("TC-ResNet8", 30),  # 16 Conv + 6 Add + 50 RQS = ~75 nodes
     ("EEGNet", 15),  # 4 Conv + 2 AvgPool + 10 RQS = 18 nodes
     ("MatchboxNet", 40),  # 19 Conv + 3 Add + 41 RQS = ~65 nodes
+    # Model Zoo batch 2 — KWS sota + sensor time-series.
+    ("BC-ResNet1", 80),  # 34 Conv + 12 Add + 100 RQS = ~148 nodes
+    ("TCN-HAR", 25),  # 10 Conv + 3 Add + 26 RQS = ~41 nodes
 ]
 
 
