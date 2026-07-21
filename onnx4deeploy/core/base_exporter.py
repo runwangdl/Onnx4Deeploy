@@ -167,12 +167,16 @@ class BaseONNXExporter(ABC):
         Return the data source used to generate (input, label) pairs for
         create_training_test_data().
 
-        Default: RandomDataSource (preserves original behaviour).
-        Override in subclasses to use real datasets (e.g. MNISTDataSource).
+        Dispatches on ``config['dataset']`` (see ``resolve_data_source``):
+        ``random`` (default, unchanged behaviour) / ``mnist`` / ``file`` (BYO
+        ``.npz`` via ``data_path``). This makes ``TrainCfg.dataset``/``data_path``
+        propagate to EVERY model that doesn't override this method — including the
+        GAP9 targets (CCT/ResNet/MobileNetV1/DSCNN/MCUNet). Subclasses may still
+        override to pin a model-appropriate default dataset.
         """
-        from ..data.random_datasource import RandomDataSource
+        from ..data import resolve_data_source
 
-        return RandomDataSource()
+        return resolve_data_source(self.config)
 
     def get_training_pipeline(self) -> "OptimizationPipeline":
         """
