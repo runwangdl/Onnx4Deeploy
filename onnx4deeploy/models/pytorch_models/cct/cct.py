@@ -44,6 +44,7 @@ class CCT(nn.Module):
         mlp_ratio=4.0,
         num_classes=1000,
         positional_embedding="learnable",
+        use_lora=False,
         *args,
         **kwargs,
     ):
@@ -78,6 +79,7 @@ class CCT(nn.Module):
             mlp_ratio=mlp_ratio,
             num_classes=num_classes,
             positional_embedding=positional_embedding,
+            use_lora=use_lora,
         )
 
     def forward(self, x):
@@ -192,7 +194,15 @@ def cct_7(arch, pretrained, progress, *args, **kwargs):
 
 @register_model
 def cct_1(
-    arch, pretrained, progress, embedding_dim=128, num_heads=2, num_layers=2, *args, **kwargs
+    arch,
+    pretrained,
+    progress,
+    embedding_dim=128,
+    num_heads=2,
+    num_layers=2,
+    mlp_ratio=2,
+    *args,
+    **kwargs,
 ):
     return _cct(
         arch,
@@ -200,7 +210,7 @@ def cct_1(
         progress,
         num_layers=num_layers,
         num_heads=num_heads,
-        mlp_ratio=2,
+        mlp_ratio=mlp_ratio,
         embedding_dim=embedding_dim,
         *args,
         **kwargs,
@@ -425,6 +435,7 @@ def cct_test(
     num_heads=2,
     num_layers=2,
     n_conv_layers=1,
+    mlp_ratio=2,
     *args,
     **kwargs,
 ):
@@ -434,6 +445,7 @@ def cct_test(
         progress,
         kernel_size=3,
         n_conv_layers=n_conv_layers,
+        mlp_ratio=mlp_ratio,
         img_size=img_size,
         positional_embedding=positional_embedding,
         num_classes=num_classes,
