@@ -281,6 +281,7 @@ class TransformerEncoderLayer(Module):
         dropout=0.1,
         attention_dropout=0.1,
         drop_path_rate=0.1,
+        use_lora=False,
     ):
         super(TransformerEncoderLayer, self).__init__()
 
@@ -289,7 +290,8 @@ class TransformerEncoderLayer(Module):
         #                            num_heads=nhead,
         #                            attention_dropout=attention_dropout,
         #                            projection_dropout=dropout)
-        self.self_attn = Attention(
+        attn_cls = AttentionwLora if use_lora else Attention
+        self.self_attn = attn_cls(
             dim=d_model,
             num_heads=nhead,
             attention_dropout=attention_dropout,
@@ -298,10 +300,11 @@ class TransformerEncoderLayer(Module):
 
         # FFN layers with LoRA (rank=8)
         # self.linear1 = LinearwLora(d_model, dim_feedforward)
-        self.linear1 = Linear(d_model, dim_feedforward)
+        linear_cls = LinearwLora if use_lora else Linear
+        self.linear1 = linear_cls(d_model, dim_feedforward)
         self.dropout1 = Dropout(dropout)
         self.norm1 = LayerNorm(d_model)
-        self.linear2 = Linear(dim_feedforward, d_model)
+        self.linear2 = linear_cls(dim_feedforward, d_model)
         # self.linear2 = LinearwLora(dim_feedforward, d_model)
         self.dropout2 = Dropout(dropout)
         self.gelu_bias = nn.Parameter(torch.zeros(dim_feedforward))
@@ -387,6 +390,7 @@ class TransformerClassifier(Module):
         stochastic_depth=0.1,
         positional_embedding="learnable",
         sequence_length=None,
+        use_lora=False,
     ):
         super().__init__()
         positional_embedding = (
@@ -436,6 +440,7 @@ class TransformerClassifier(Module):
                     dropout=dropout,
                     attention_dropout=attention_dropout,
                     drop_path_rate=dpr[i],
+                    use_lora=use_lora,
                 )
                 for i in range(num_layers)
             ]

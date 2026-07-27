@@ -83,6 +83,8 @@ class CCTExporter(BaseONNXExporter):
             num_heads=self.model_config["num_heads"],
             num_layers=self.model_config["num_layers"],
             n_conv_layers=self.model_config.get("n_conv_layers", 1),
+            mlp_ratio=self.model_config.get("mlp_ratio", 2),
+            use_lora=self.model_config.get("use_lora", False),
             positional_embedding=self.model_config.get("positional_embedding", "learnable"),
             stochastic_depth=0.0,  # Disable DropPath: no RandomUniformLike in ONNX
             dropout=0.0,  # Disable Dropout: no Dropout op in ONNX
