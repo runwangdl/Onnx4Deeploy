@@ -4,7 +4,19 @@
 
 """ResNet models for ONNX export."""
 
-from .resnet import BasicBlock, Bottleneck, ResNet, ResNet8, resnet8, resnet18, resnet34, resnet50
+from .resnet import (
+    LORA_TARGETS,
+    BasicBlock,
+    Bottleneck,
+    ResNet,
+    ResNet8,
+    resnet8,
+    resnet8_lora,
+    resnet8_lora_trainable_params,
+    resnet18,
+    resnet34,
+    resnet50,
+)
 
 __all__ = [
     "ResNet",
@@ -12,6 +24,9 @@ __all__ = [
     "Bottleneck",
     "ResNet8",
     "resnet8",
+    "resnet8_lora",
+    "resnet8_lora_trainable_params",
+    "LORA_TARGETS",
     "resnet18",
     "resnet34",
     "resnet50",

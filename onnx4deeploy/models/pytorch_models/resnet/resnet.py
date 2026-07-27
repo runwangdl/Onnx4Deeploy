@@ -10,10 +10,14 @@ Based on the original ResNet paper:
 This implementation is optimized for ONNX export with clean computation graphs.
 """
 
-from typing import List, Type, Union
+import functools
+from typing import Callable, List, Optional, Type, Union
 
 import torch
 import torch.nn as nn
+
+from ..lora import Conv2d as LoRAConv2d
+from ..lora import lora_parameter_names
 
 
 class BasicBlock(nn.Module):
@@ -30,7 +34,12 @@ class BasicBlock(nn.Module):
     expansion = 1
 
     def __init__(
-        self, in_channels: int, out_channels: int, stride: int = 1, downsample: nn.Module = None
+        self,
+        in_channels: int,
+        out_channels: int,
+        stride: int = 1,
+        downsample: nn.Module = None,
+        conv_layer: Optional[Callable[..., nn.Module]] = None,
     ):
         """
         Initialize BasicBlock.
@@ -40,18 +49,22 @@ class BasicBlock(nn.Module):
             out_channels: Number of output channels
             stride: Stride for first convolution
             downsample: Optional downsampling layer for residual connection
+            conv_layer: Factory used for the two 3x3 convolutions.  Defaults to
+                ``nn.Conv2d``; pass a LoRA-wrapped factory to adapt this block.
         """
         super(BasicBlock, self).__init__()
 
+        conv_layer = conv_layer or nn.Conv2d
+
         # First convolution block
-        self.conv1 = nn.Conv2d(
+        self.conv1 = conv_layer(
             in_channels, out_channels, kernel_size=3, stride=stride, padding=1, bias=False
         )
         self.bn1 = nn.BatchNorm2d(out_channels)
         self.relu = nn.ReLU(inplace=False)  # inplace=False for clean ONNX export
 
         # Second convolution block
-        self.conv2 = nn.Conv2d(
+        self.conv2 = conv_layer(
             out_channels, out_channels, kernel_size=3, stride=1, padding=1, bias=False
         )
         self.bn2 = nn.BatchNorm2d(out_channels)
@@ -335,13 +348,32 @@ class ResNet8(nn.Module):
         num_classes: int = 10,
         input_channels: int = 3,
         base_channels: int = 16,
+        conv_layer: Optional[Callable[..., nn.Module]] = None,
+        stem_conv_layer: Optional[Callable[..., nn.Module]] = None,
+        downsample_conv_layer: Optional[Callable[..., nn.Module]] = None,
     ):
+        """
+        Args:
+            conv_layer: Factory for the six 3x3 convolutions inside the residual
+                blocks.  Defaults to ``nn.Conv2d``.
+            stem_conv_layer: Factory for the initial 3x3 stem conv.  Defaults to
+                ``conv_layer``.
+            downsample_conv_layer: Factory for the 1x1 residual-projection convs.
+                Defaults to ``conv_layer``.
+        """
         super(ResNet8, self).__init__()
 
         c = base_channels  # 16 by default
 
+        conv_layer = conv_layer or nn.Conv2d
+        stem_conv_layer = stem_conv_layer or conv_layer
+        self._downsample_conv_layer = downsample_conv_layer or conv_layer
+        self._conv_layer = conv_layer
+
         # Initial 3×3 conv (no maxpool — input is only 32×32)
-        self.conv1 = nn.Conv2d(input_channels, c, kernel_size=3, stride=1, padding=1, bias=False)
+        self.conv1 = stem_conv_layer(
+            input_channels, c, kernel_size=3, stride=1, padding=1, bias=False
+        )
         self.bn1 = nn.BatchNorm2d(c)
         self.relu = nn.ReLU(inplace=False)
 
@@ -359,10 +391,16 @@ class ResNet8(nn.Module):
         downsample = None
         if stride != 1 or in_ch != out_ch:
             downsample = nn.Sequential(
-                nn.Conv2d(in_ch, out_ch, kernel_size=1, stride=stride, bias=False),
+                self._downsample_conv_layer(
+                    in_ch, out_ch, kernel_size=1, stride=stride, bias=False
+                ),
                 nn.BatchNorm2d(out_ch),
             )
-        return nn.Sequential(BasicBlock(in_ch, out_ch, stride=stride, downsample=downsample))
+        return nn.Sequential(
+            BasicBlock(
+                in_ch, out_ch, stride=stride, downsample=downsample, conv_layer=self._conv_layer
+            )
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.relu(self.bn1(self.conv1(x)))
@@ -393,3 +431,78 @@ def resnet8(num_classes: int = 10, input_channels: int = 3, base_channels: int =
     return ResNet8(
         num_classes=num_classes, input_channels=input_channels, base_channels=base_channels
     )
+
+
+# ---------------------------------------------------------------------------- #
+# LoRA variant                                                                  #
+# ---------------------------------------------------------------------------- #
+
+#: Which convolutions receive a LoRA adapter.
+#:   "blocks_only" — the six 3x3 convs inside the residual blocks
+#:   "all_conv"    — the above, plus the 3x3 stem and the two 1x1 projections
+LORA_TARGETS = ("blocks_only", "all_conv")
+
+
+def resnet8_lora(
+    num_classes: int = 10,
+    input_channels: int = 3,
+    base_channels: int = 16,
+    lora_r: int = 8,
+    lora_alpha: int = 16,
+    lora_dropout: float = 0.0,
+    lora_targets: str = "all_conv",
+    b_init: str = "zeros",
+) -> ResNet8:
+    """ResNet-8 with loralib-style convolutional LoRA adapters.
+
+    The adapters follow ``loralib.ConvLoRA`` exactly: the delta weight is
+    materialised as ``(lora_B @ lora_A).view(W.shape) * (lora_alpha / lora_r)``
+    and a *single* convolution is run with ``W + delta``.
+
+    Because loralib folds one kernel dimension into each side of the
+    factorisation, the **effective rank is ``lora_r * kernel_size``**, i.e. 24
+    for the default ``lora_r=8`` on a 3x3 conv (and ``lora_r`` itself on the 1x1
+    projections).  This is *not* the same as a PEFT adapter with ``r=lora_r``.
+
+    Args:
+        lora_r: LoRA rank parameter (effective rank is ``lora_r * k``).
+        lora_alpha: Scaling numerator; ``scaling = lora_alpha / lora_r``.
+        lora_dropout: Dropout on the conv input; keep at 0 for ONNX export.
+        lora_targets: One of ``LORA_TARGETS``.
+        b_init: ``"zeros"`` (loralib-exact) or ``"small_normal"``.
+
+    Returns:
+        A ``ResNet8`` whose targeted convs are ``lora.Conv2d`` modules.
+    """
+    if lora_targets not in LORA_TARGETS:
+        raise ValueError(f"lora_targets must be one of {LORA_TARGETS}, got {lora_targets!r}")
+
+    lora_conv = functools.partial(
+        LoRAConv2d,
+        r=lora_r,
+        lora_alpha=lora_alpha,
+        lora_dropout=lora_dropout,
+        merge_weights=False,  # keep the LoRA branch explicit in the traced graph
+        b_init=b_init,
+    )
+
+    if lora_targets == "all_conv":
+        stem_conv_layer = lora_conv
+        downsample_conv_layer = lora_conv
+    else:
+        stem_conv_layer = nn.Conv2d
+        downsample_conv_layer = nn.Conv2d
+
+    return ResNet8(
+        num_classes=num_classes,
+        input_channels=input_channels,
+        base_channels=base_channels,
+        conv_layer=lora_conv,
+        stem_conv_layer=stem_conv_layer,
+        downsample_conv_layer=downsample_conv_layer,
+    )
+
+
+def resnet8_lora_trainable_params(model: nn.Module) -> List[str]:
+    """LoRA parameter names of a ``resnet8_lora`` model (ONNX initializer names)."""
+    return lora_parameter_names(model)
