@@ -11,7 +11,7 @@ import numpy as np
 import torch
 
 from ..core.base_exporter import BaseONNXExporter
-from .pytorch_models.resnet import resnet8, resnet18, resnet34, resnet50
+from .pytorch_models.resnet import resnet8, resnet8_lora, resnet18, resnet34, resnet50
 
 
 class ResNetExporter(BaseONNXExporter):
@@ -32,10 +32,19 @@ class ResNetExporter(BaseONNXExporter):
             "input_channels": 3,
             "num_classes": 1000,
             "opset_version": 17,
-            "variant": "resnet18",  # "resnet8" | "resnet18" | "resnet34" | "resnet50"
+            # "resnet8" | "resnet8_lora" | "resnet18" | "resnet34" | "resnet50"
+            "variant": "resnet18",
             "base_channels": 16,  # ResNet-8 only
+            # LoRA (resnet8_lora only) — loralib ConvLoRA semantics.
+            # NOTE: effective rank is lora_r * kernel_size (24 for r=8, k=3), NOT lora_r.
+            "lora_r": 4,
+            "lora_alpha": 16,
+            "lora_dropout": 0.0,
+            "lora_targets": "all_conv",  # "all_conv" | "blocks_only"
+            "lora_b_init": "zeros",  # "zeros" (loralib-exact) | "small_normal"
             # Training
-            "training_strategy": "full",  # "full" | "last_layer" | "no_stem" | "custom"
+            # "full" | "last_layer" | "no_stem" | "lora" | "custom"
+            "training_strategy": "full",
             "custom_trainable_params": [],
             "learning_rate": 0.001,
             "n_batches": 4,
@@ -47,7 +56,7 @@ class ResNetExporter(BaseONNXExporter):
             config.update(self._config_overrides)
 
         # Auto-adjust defaults for resnet8 (CIFAR-10 / MLperf Tiny IC)
-        if config.get("variant") == "resnet8":
+        if config.get("variant") in ("resnet8", "resnet8_lora"):
             overrides = getattr(self, "_config_overrides", {}) or {}
             if "img_size" not in overrides:
                 config["img_size"] = 32
@@ -71,6 +80,17 @@ class ResNetExporter(BaseONNXExporter):
                 num_classes=num_classes,
                 input_channels=input_channels,
                 base_channels=self.model_config.get("base_channels", 16),
+            )
+        elif variant == "resnet8_lora":
+            return resnet8_lora(
+                num_classes=num_classes,
+                input_channels=input_channels,
+                base_channels=self.model_config.get("base_channels", 16),
+                lora_r=self.model_config.get("lora_r", 4),
+                lora_alpha=self.model_config.get("lora_alpha", 16),
+                lora_dropout=self.model_config.get("lora_dropout", 0.0),
+                lora_targets=self.model_config.get("lora_targets", "all_conv"),
+                b_init=self.model_config.get("lora_b_init", "zeros"),
             )
         elif variant == "resnet18":
             return resnet18(num_classes=num_classes, input_channels=input_channels)
@@ -111,15 +131,31 @@ class ResNetExporter(BaseONNXExporter):
         - "full":       Train all parameters.
         - "last_layer": Only the final FC classifier.
         - "no_stem":    Freeze the initial conv/bn stem; train residual stages + FC.
+        - "lora":       Only lora_A / lora_B tensors (base conv weights frozen).
         - "custom":     Explicit list from config["custom_trainable_params"].
+
+        NOTE: setting ``requires_grad=False`` on the PyTorch parameters is NOT
+        enough to freeze anything.  ORT decides what to differentiate from the
+        ``requires_grad`` list passed to ``generate_artifacts``, which is exactly
+        what this method returns — so a base weight omitted here is the only
+        thing that stops a gradient accumulator being emitted for it.
         """
         strategy = self.config.get("training_strategy", "full")
+
+        # By the time this runs, the optimization passes have rewritten the PyTorch
+        # parameter names: "layer1.0.conv1.lora_A" → "layer1_0_conv1_lora_A".  Callers
+        # naturally write custom_trainable_params in the dotted PyTorch form, so
+        # normalise both sides — otherwise the list matches nothing and the model is
+        # exported with zero trainable parameters.
+        custom = {n.replace(".", "_") for n in self.config.get("custom_trainable_params", [])}
 
         _FREEZE = {
             "full": lambda n: False,
             "last_layer": lambda n: "fc" not in n,
             "no_stem": lambda n: n in {"conv1.weight", "bn1.weight", "bn1.bias"},
-            "custom": lambda n: n not in self.config.get("custom_trainable_params", []),
+            # Suffix match, for the same normalisation reason.
+            "lora": lambda n: not n.endswith(("lora_A", "lora_B")),
+            "custom": lambda n: n.replace(".", "_") not in custom,
         }
 
         if strategy not in _FREEZE:
@@ -135,6 +171,21 @@ class ResNetExporter(BaseONNXExporter):
         )
         if frozen:
             print(f"   Frozen (→ constant): {frozen[:5]}{'…' if len(frozen) > 5 else ''}")
+
+        if strategy in ("lora", "custom") and not requires_grad:
+            raise RuntimeError(
+                f"Strategy '{strategy}' selected zero trainable parameters out of "
+                f"{len(all_param_names)}. custom_trainable_params probably does not match "
+                f"the ONNX initializer names. Available names: {all_param_names[:10]}…"
+            )
+
+        # Guard the failure mode this exists to prevent: a LoRA run that silently
+        # keeps training the base weights.
+        if strategy in ("lora", "custom") and self.config.get("variant") == "resnet8_lora":
+            leaked = [n for n in requires_grad if not n.endswith(("lora_A", "lora_B"))]
+            if leaked:
+                print(f"⚠️  Non-LoRA tensors are trainable in a LoRA run: {leaked}")
+
         return requires_grad
 
     # ------------------------------------------------------------------ #

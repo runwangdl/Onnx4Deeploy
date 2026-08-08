@@ -164,6 +164,24 @@ def list_available_models():
             "classes": 10,
             "config": {"variant": "resnet8", "img_size": 32, "num_classes": 10},
         },
+        "ResNet8LoRA": {
+            "class": ResNetExporter,
+            "description": (
+                "ResNet-8 + loralib-style conv LoRA (effective rank = lora_r * k), "
+                "LoRA-only training"
+            ),
+            "input_shape": "(B, 3, 32, 32)",
+            "classes": 10,
+            "config": {
+                "variant": "resnet8_lora",
+                "img_size": 32,
+                "num_classes": 10,
+                "lora_r": 4,
+                "lora_alpha": 16,
+                "lora_targets": "all_conv",
+                "training_strategy": "lora",
+            },
+        },
         # VWW — Visual Wake Words (MobileNetV2-0.35, 96×96, 2 classes)
         "MobileNetV2-VWW": {
             "class": MobileNetV2Exporter,
